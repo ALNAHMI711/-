@@ -1,0 +1,38 @@
+name: Quality Gate
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  repository-integrity:
+    name: Repository integrity
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Verify required baseline files
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -f README.md
+          test -f README_AR.md
+          test -f .gitignore
+          test -f .env.example
+          test -f SECURITY.md
+          test -f docs/PIPELINE.md
+          test ! -f .env
+          echo "Baseline files: OK"
+      - name: Basic secret-pattern guard
+        shell: bash
+        run: |
+          set -euo pipefail
+          if grep -RInE --exclude-dir=.git --exclude='quality.yml' '(sk-[A-Za-z0-9_-]{20,}|AIza[0-9A-Za-z_-]{20,}|BEGIN (RSA |EC |OPENSSH )?PRIVATE KEY|ghp_[A-Za-z0-9]{20,})' .; then
+            echo "Potential hard-coded secret detected"
+            exit 1
+          fi
+          echo "Secret-pattern guard: OK"
