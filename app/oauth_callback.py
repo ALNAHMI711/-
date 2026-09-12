@@ -60,6 +60,7 @@ def handle_oauth_callback(
     session_store: OAuthStateStore,
     error: str | None = None,
     error_description: str | None = None,
+    now: float | None = None,
 ) -> OAuthCallbackResult:
     """Validate a provider callback before any token exchange or account mutation."""
     normalized_platform = platform.strip().lower()
@@ -77,7 +78,7 @@ def handle_oauth_callback(
             error="حالة OAuth مفقودة؛ تم رفض الطلب.",
         )
 
-    if not session_store.consume(expected_state, received_state):
+    if not session_store.consume(expected_state, received_state, now=now):
         return OAuthCallbackResult(
             OAuthCallbackStatus.INVALID_STATE,
             normalized_platform,
