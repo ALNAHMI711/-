@@ -17,6 +17,7 @@ def test_valid_callback_consumes_state_once():
         expected_state=state,
         received_state=state.value,
         session_store=store,
+        now=100.0,
     )
 
     assert result.status == OAuthCallbackStatus.LINKED
@@ -26,6 +27,7 @@ def test_valid_callback_consumes_state_once():
         expected_state=state,
         received_state=state.value,
         session_store=store,
+        now=100.0,
     ).status == OAuthCallbackStatus.INVALID_STATE
 
 
@@ -38,6 +40,7 @@ def test_wrong_platform_is_rejected_before_consuming_state():
         expected_state=state,
         received_state=state.value,
         session_store=store,
+        now=100.0,
     )
 
     assert result.status == OAuthCallbackStatus.INVALID_REQUEST
@@ -53,6 +56,7 @@ def test_missing_state_is_rejected():
         expected_state=state,
         received_state="",
         session_store=store,
+        now=100.0,
     )
 
     assert result.status == OAuthCallbackStatus.INVALID_STATE
@@ -69,6 +73,7 @@ def test_provider_denial_is_reported_after_valid_state():
         session_store=store,
         error="access_denied",
         error_description="المستخدم رفض التفويض.",
+        now=100.0,
     )
 
     assert result.status == OAuthCallbackStatus.AUTHORIZATION_DENIED
