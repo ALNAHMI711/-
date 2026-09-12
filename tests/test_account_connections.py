@@ -8,7 +8,7 @@ from app.account_connections import (
 )
 
 
-def test_connected_account_is_publish_ready_with_required_permissions():
+def test_connected_account_verifies_with_required_permissions():
     account = AccountConnection(
         account_id="yt-1",
         platform="youtube",
@@ -21,6 +21,20 @@ def test_connected_account_is_publish_ready_with_required_permissions():
     result = verify_connection(account, ("upload",))
 
     assert result.state == VerificationState.VERIFIED
+    assert result.missing_permissions == ()
+
+
+def test_verified_account_is_publish_ready():
+    account = AccountConnection(
+        account_id="yt-2",
+        platform="youtube",
+        display_name="مضحك",
+        project_id="funny",
+        connection_state=ConnectionState.CONNECTED,
+        verification_state=VerificationState.VERIFIED,
+        permissions=("upload",),
+    )
+
     assert account.ready_to_publish
 
 
