@@ -67,6 +67,10 @@ class WorkerCommandLedger:
     def __init__(self) -> None:
         self._results: dict[str, CommandResult] = {}
 
+    def get(self, command_id: str) -> CommandResult | None:
+        """Return a prior result without mutating the ledger."""
+        return self._results.get(command_id)
+
     def accept(self, command: WorkerCommand, worker_id: str, now: datetime | None = None) -> CommandResult:
         if command.worker_id != worker_id:
             raise CommandRejected("command targets a different worker")
@@ -74,6 +78,8 @@ class WorkerCommandLedger:
             raise CommandRejected("command has expired")
         existing = self._results.get(command.command_id)
         if existing is not None:
+            if existing.worker_id != worker_id:
+                raise CommandRejected("worker does not own command")
             return existing
         result = CommandResult(command.command_id, worker_id, CommandStatus.ACCEPTED)
         self._results[command.command_id] = result
