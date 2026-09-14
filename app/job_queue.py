@@ -87,6 +87,19 @@ class JobQueue:
         job.last_error = None
         return job
 
+    def renew(self, job_id: str, worker_id: str, lease_seconds: int = 300,
+              now: datetime | None = None) -> Job:
+        if not worker_id.strip() or lease_seconds < 1:
+            raise ValueError("worker_id and positive lease_seconds are required")
+        job = self.get(job_id)
+        if job.state is not JobState.RUNNING or job.worker_id != worker_id:
+            raise InvalidJobTransition("only the owning worker can renew a running job")
+        current = now or datetime.now(timezone.utc)
+        if current.tzinfo is None:
+            raise ValueError("now must be timezone-aware")
+        job.lease_until = current + timedelta(seconds=lease_seconds)
+        return job
+
     def succeed(self, job_id: str) -> Job:
         job = self.get(job_id)
         if job.state is not JobState.RUNNING:
