@@ -1,13 +1,15 @@
-"""HTTP boundary for authenticated worker messages."""
+"""HTTP boundary for authenticated and structured worker commands."""
 
 from dataclasses import dataclass
 from datetime import datetime, timezone
+import json
 from typing import Callable, Mapping, Protocol
 
 from fastapi import FastAPI, HTTPException, Path
 from pydantic import BaseModel, ConfigDict, Field
 
 from .replay_protection import InMemoryReplayGuard, ReplayGuard
+from .worker_commands import CommandRejected, CommandType, WorkerCommand, WorkerCommandLedger
 from .worker_transport import TransportEnvelope, TransportRejected, validate_envelope
 
 
@@ -43,11 +45,51 @@ class WorkerMessage(BaseModel):
 class WorkerMessageResponse(BaseModel):
     accepted: bool = True
     message_id: str
+    command_id: str | None = None
+    command_status: str | None = None
+
+
+_COMMAND_FIELDS = {
+    "command_id",
+    "command_type",
+    "worker_id",
+    "job_id",
+    "job_type",
+    "issued_at",
+    "expires_at",
+}
+
+
+def parse_worker_command(body: str) -> WorkerCommand:
+    """Parse a bounded JSON command; arbitrary shell/script payloads are forbidden."""
+    try:
+        payload = json.loads(body)
+    except json.JSONDecodeError as exc:
+        raise CommandRejected("command body must be valid JSON") from exc
+    if not isinstance(payload, dict) or set(payload) != _COMMAND_FIELDS:
+        raise CommandRejected("command payload has invalid fields")
+    try:
+        command_type = CommandType(payload["command_type"])
+        issued_at = datetime.fromisoformat(payload["issued_at"])
+        expires_at = datetime.fromisoformat(payload["expires_at"])
+        if issued_at.tzinfo is None or expires_at.tzinfo is None:
+            raise ValueError("command timestamps must be timezone-aware")
+        return WorkerCommand(
+            command_id=str(payload["command_id"]),
+            command_type=command_type,
+            worker_id=str(payload["worker_id"]),
+            job_id=payload["job_id"],
+            job_type=payload["job_type"],
+            issued_at=issued_at,
+            expires_at=expires_at,
+        )
+    except (KeyError, TypeError, ValueError) as exc:
+        raise CommandRejected("invalid worker command") from exc
 
 
 def _classify_rejection(error: TransportRejected) -> tuple[int, str]:
     message = str(error)
-    if message == "authentication failed" or message == "authentication secret is missing":
+    if message in {"authentication failed", "authentication secret is missing"}:
         return 401, "worker authentication failed"
     if message == "worker identity mismatch":
         return 403, "worker identity rejected"
@@ -58,17 +100,21 @@ def _classify_rejection(error: TransportRejected) -> tuple[int, str]:
 
 def create_worker_http_app(
     secret_resolver: WorkerSecretResolver,
-    handler: Callable[[TransportEnvelope], None],
+    handler: Callable[[WorkerCommand], None],
     replay_guard: ReplayGuard | None = None,
+    command_ledger: WorkerCommandLedger | None = None,
+    clock: Callable[[], datetime] | None = None,
 ) -> FastAPI:
     """Create the internal worker HTTP app.
 
-    Validation happens before the handler is called. The request never carries
-    a worker secret; the server resolves it internally and consumes the message
-    ID atomically through the supplied replay guard.
+    Transport authentication runs before command parsing. The handler receives
+    only a validated WorkerCommand and never receives raw shell/script input.
     """
     if replay_guard is None:
         replay_guard = InMemoryReplayGuard()
+    if command_ledger is None:
+        command_ledger = WorkerCommandLedger()
+    now_fn = clock or (lambda: datetime.now(timezone.utc))
 
     app = FastAPI(title="Mashahid Worker Transport", docs_url=None, redoc_url=None)
 
@@ -83,6 +129,9 @@ def create_worker_http_app(
     ) -> WorkerMessageResponse:
         if payload.issued_at.tzinfo is None or payload.expires_at.tzinfo is None:
             raise HTTPException(status_code=400, detail="timestamps must include timezone")
+        current = now_fn()
+        if current.tzinfo is None:
+            raise HTTPException(status_code=500, detail="server clock must be timezone-aware")
         try:
             envelope = TransportEnvelope(
                 message_id=payload.message_id,
@@ -97,6 +146,7 @@ def create_worker_http_app(
                 envelope,
                 expected_worker_id=worker_id,
                 secret=secret or "",
+                now=current,
                 replay_guard=replay_guard,
             )
         except ValueError as error:
@@ -105,7 +155,17 @@ def create_worker_http_app(
                 raise HTTPException(status_code=status, detail=detail) from error
             raise HTTPException(status_code=400, detail="malformed worker message") from error
 
-        handler(envelope)
-        return WorkerMessageResponse(message_id=envelope.message_id)
+        try:
+            command = parse_worker_command(envelope.body)
+            result = command_ledger.accept(command, worker_id, now=current)
+        except CommandRejected as error:
+            raise HTTPException(status_code=400, detail="invalid or unauthorized worker command") from error
+
+        handler(command)
+        return WorkerMessageResponse(
+            message_id=envelope.message_id,
+            command_id=result.command_id,
+            command_status=result.status.value,
+        )
 
     return app
