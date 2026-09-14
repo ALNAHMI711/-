@@ -43,6 +43,11 @@ class RedisLeaseCoordinator:
             raise LeaseNotOwned("lease is already held")
         return Lease(key, owner, token, current + timedelta(seconds=ttl_seconds))
 
+    def acquire_job(self, key: str, owner: str, ttl_seconds: int,
+                    now: datetime | None = None) -> Lease:
+        """Common control-plane boundary for acquiring an opaque job lease."""
+        return self.acquire(key, owner, ttl_seconds, now=now)
+
     def renew(self, lease: Lease, ttl_seconds: int, now: datetime | None = None) -> Lease:
         if ttl_seconds <= 0:
             raise ValueError("ttl_seconds must be positive")
