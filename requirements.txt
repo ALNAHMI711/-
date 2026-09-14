@@ -1,2 +1,3 @@
 pytest==8.4.2
 psycopg[binary]==3.2.10
+redis==6.4.0
