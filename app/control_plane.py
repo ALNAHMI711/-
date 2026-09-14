@@ -109,6 +109,7 @@ class ControlPlane:
         current = now or datetime.now(timezone.utc)
         if current.tzinfo is None:
             raise ValueError("now must be timezone-aware")
+        self.queue.renew(job_id, worker_id, lease_seconds=lease_seconds, now=current)
         distributed_lease = self._job_leases.get(job_id)
         if distributed_lease is None:
             return None
