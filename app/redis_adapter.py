@@ -1,11 +1,11 @@
 """Production Redis lease adapter.
 
-This adapter uses Redis atomic SET NX EX acquisition and owner-checked Lua
-scripts for renewal/release. Redis is coordination only; PostgreSQL remains the
-source of truth for durable job state.
+Redis is coordination only; PostgreSQL remains the source of truth for durable
+job state. Redis stores only an opaque lease token, never platform credentials.
 """
 
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
+from secrets import token_urlsafe
 
 import redis
 
@@ -27,6 +27,8 @@ return 0
 
 
 class RedisLeaseCoordinator:
+    """Redis-backed atomic lease coordinator using opaque ownership tokens."""
+
     def __init__(self, client: redis.Redis) -> None:
         self._client = client
 
@@ -36,10 +38,10 @@ class RedisLeaseCoordinator:
         current = now or datetime.now(timezone.utc)
         if current.tzinfo is None:
             raise ValueError("now must be timezone-aware")
-        acquired = self._client.set(key, owner, nx=True, ex=ttl_seconds)
-        if not acquired:
+        token = token_urlsafe(32)
+        if not self._client.set(key, token, nx=True, ex=ttl_seconds):
             raise LeaseNotOwned("lease is already held")
-        return Lease(key, owner, current.timestamp() and current + __import__("datetime").timedelta(seconds=ttl_seconds))
+        return Lease(key, owner, token, current + timedelta(seconds=ttl_seconds))
 
     def renew(self, lease: Lease, ttl_seconds: int, now: datetime | None = None) -> Lease:
         if ttl_seconds <= 0:
@@ -47,12 +49,12 @@ class RedisLeaseCoordinator:
         current = now or datetime.now(timezone.utc)
         if current.tzinfo is None:
             raise ValueError("now must be timezone-aware")
-        result = self._client.eval(_RENEW, 1, lease.key, lease.owner, ttl_seconds)
+        result = self._client.eval(_RENEW, 1, lease.key, lease.token, ttl_seconds)
         if result != 1:
             raise LeaseNotOwned("lease is not owned by caller")
-        return Lease(lease.key, lease.owner, current + __import__("datetime").timedelta(seconds=ttl_seconds))
+        return Lease(lease.key, lease.owner, lease.token, current + timedelta(seconds=ttl_seconds))
 
     def release(self, lease: Lease) -> None:
-        result = self._client.eval(_RELEASE, 1, lease.key, lease.owner)
+        result = self._client.eval(_RELEASE, 1, lease.key, lease.token)
         if result != 1:
             raise LeaseNotOwned("lease is not owned by caller")
