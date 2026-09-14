@@ -21,11 +21,7 @@ class DispatchError(RuntimeError):
 
 
 class ControlPlane:
-    """Small in-memory orchestration contract for the production control plane.
-
-    Durable storage, distributed leases and authenticated worker transport are
-    production adapters; this class defines their safe domain-level handoff.
-    """
+    """In-memory orchestration contract; durable adapters belong to production."""
 
     def __init__(self, scheduler=None, queue=None, nodes=None, command_ledger=None) -> None:
         self.scheduler = scheduler or Scheduler()
@@ -34,7 +30,6 @@ class ControlPlane:
         self.command_ledger = command_ledger or WorkerCommandLedger()
 
     def materialize_due(self, now: datetime | None = None) -> tuple[Job, ...]:
-        """Turn due schedules into idempotent queue jobs exactly once."""
         current = now or datetime.now(timezone.utc)
         if current.tzinfo is None:
             raise ValueError("now must be timezone-aware")
@@ -56,57 +51,54 @@ class ControlPlane:
         lease_seconds: int = 300,
         now: datetime | None = None,
     ) -> DispatchLease:
-        """Route a queued job, claim it, and create its expiring worker command."""
         job = self.queue.get(job_id)
         if job.state.value != "queued":
             raise DispatchError(f"job is not queued: {job.state.value}")
+        issued_at = now or datetime.now(timezone.utc)
+        if issued_at.tzinfo is None:
+            raise ValueError("now must be timezone-aware")
         try:
             node = self.nodes.route(JobRequest(job_id=job_id, required_capabilities=required_capabilities))
         except NoAvailableNode as exc:
             raise DispatchError(str(exc)) from exc
         try:
-            self.queue.claim(job_id, node.node_id, lease_seconds=lease_seconds, now=now)
-        except Exception:
-            self.nodes.release(node.node_id)
-            raise
-        issued_at = now or datetime.now(timezone.utc)
-        if issued_at.tzinfo is None:
-            self.nodes.release(node.node_id)
-            raise ValueError("now must be timezone-aware")
-        command = WorkerCommand(
-            command_id=f"cmd:{job_id}:{job.attempts}",
-            command_type=CommandType.EXECUTE_JOB,
-            worker_id=node.node_id,
-            job_id=job_id,
-            job_type=job.job_type,
-            issued_at=issued_at,
-            expires_at=job.lease_until,
-        )
-        try:
+            self.queue.claim(job_id, node.node_id, lease_seconds=lease_seconds, now=issued_at)
+            command = WorkerCommand(
+                command_id=f"cmd:{job_id}:{job.attempts}",
+                command_type=CommandType.EXECUTE_JOB,
+                worker_id=node.node_id,
+                job_id=job_id,
+                job_type=job.job_type,
+                issued_at=issued_at,
+                expires_at=job.lease_until,
+            )
             self.command_ledger.accept(command, node.node_id, now=issued_at)
         except Exception:
-            self.queue.fail(job_id, "worker command creation failed", retry=False)
+            try:
+                self.queue.fail(job_id, "worker dispatch setup failed", retry=False)
+            except Exception:
+                pass
             self.nodes.release(node.node_id)
             raise
         return DispatchLease(job_id=job_id, worker_id=node.node_id, command=command)
 
     def succeed(self, job_id: str, worker_id: str) -> Job:
         job = self._owned_job(job_id, worker_id)
-        result = self.queue.succeed(job.job_id)
+        result = self.queue.succeed(job_id)
+        self.command_ledger.finish(self._command_id(job), worker_id, True)
         self.nodes.release(worker_id)
-        self.command_ledger.finish(job.job_id and job.job_id and f"cmd:{job.job_id}:{job.attempts}", worker_id, True)
         return result
 
     def fail(self, job_id: str, worker_id: str, error: str, retry: bool = True) -> Job:
         job = self._owned_job(job_id, worker_id)
-        result = self.queue.fail(job.job_id, error, retry=retry)
+        result = self.queue.fail(job_id, error, retry=retry)
+        self.command_ledger.finish(self._command_id(job), worker_id, False, error)
         self.nodes.release(worker_id)
-        self.command_ledger.finish(f"cmd:{job.job_id}:{job.attempts}", worker_id, False, error)
         return result
 
     def cancel(self, job_id: str, worker_id: str | None = None) -> Job:
         job = self.queue.get(job_id)
-        if worker_id is not None and job.worker_id != worker_id:
+        if job.worker_id is not None and job.worker_id != worker_id:
             raise DispatchError("worker does not own job")
         owner = job.worker_id
         result = self.queue.cancel(job_id)
@@ -122,8 +114,6 @@ class ControlPlane:
             raise DispatchError("worker does not own job")
         return job
 
-    def complete_with_owner_check(self, job_id: str, worker_id: str) -> Job:
-        return self.succeed(job_id, worker_id)
-
-    def fail_with_owner_check(self, job_id: str, worker_id: str, error: str, retry: bool = True) -> Job:
-        return self.fail(job_id, worker_id, error, retry=retry)
+    @staticmethod
+    def _command_id(job: Job) -> str:
+        return f"cmd:{job.job_id}:{job.attempts}"
