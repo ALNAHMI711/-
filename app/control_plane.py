@@ -5,6 +5,7 @@ from datetime import datetime, timezone
 
 from .compute_nodes import ComputeNodeManager, JobRequest, NoAvailableNode
 from .job_queue import DuplicateJob, Job, JobQueue
+from .redis_coordination import Lease
 from .scheduler import Scheduler
 from .worker_commands import CommandType, WorkerCommand, WorkerCommandLedger
 
@@ -21,13 +22,16 @@ class DispatchError(RuntimeError):
 
 
 class ControlPlane:
-    """In-memory orchestration contract; durable adapters belong to production."""
+    """Orchestration contract with optional distributed job leases."""
 
-    def __init__(self, scheduler=None, queue=None, nodes=None, command_ledger=None) -> None:
+    def __init__(self, scheduler=None, queue=None, nodes=None, command_ledger=None,
+                 lease_coordinator=None) -> None:
         self.scheduler = scheduler or Scheduler()
         self.queue = queue or JobQueue()
         self.nodes = nodes or ComputeNodeManager()
         self.command_ledger = command_ledger or WorkerCommandLedger()
+        self.lease_coordinator = lease_coordinator
+        self._job_leases: dict[str, Lease] = {}
 
     def materialize_due(self, now: datetime | None = None) -> tuple[Job, ...]:
         current = now or datetime.now(timezone.utc)
@@ -54,6 +58,8 @@ class ControlPlane:
         job = self.queue.get(job_id)
         if job.state.value != "queued":
             raise DispatchError(f"job is not queued: {job.state.value}")
+        if lease_seconds <= 0:
+            raise ValueError("lease_seconds must be positive")
         issued_at = now or datetime.now(timezone.utc)
         if issued_at.tzinfo is None:
             raise ValueError("now must be timezone-aware")
@@ -61,7 +67,13 @@ class ControlPlane:
             node = self.nodes.route(JobRequest(job_id=job_id, required_capabilities=required_capabilities))
         except NoAvailableNode as exc:
             raise DispatchError(str(exc)) from exc
+
+        distributed_lease: Lease | None = None
         try:
+            if self.lease_coordinator is not None:
+                distributed_lease = self.lease_coordinator.acquire_job(
+                    f"job:{job_id}", node.node_id, lease_seconds, now=issued_at
+                )
             self.queue.claim(job_id, node.node_id, lease_seconds=lease_seconds, now=issued_at)
             command = WorkerCommand(
                 command_id=f"cmd:{job_id}:{job.attempts}",
@@ -73,19 +85,42 @@ class ControlPlane:
                 expires_at=job.lease_until,
             )
             self.command_ledger.accept(command, node.node_id, now=issued_at)
-        except Exception:
+            if distributed_lease is not None:
+                self._job_leases[job_id] = distributed_lease
+        except Exception as exc:
+            if distributed_lease is not None:
+                self._release_lease(distributed_lease)
             try:
                 self.queue.fail(job_id, "worker dispatch setup failed", retry=False)
             except Exception:
                 pass
             self.nodes.release(node.node_id)
+            if isinstance(exc, DispatchError):
+                raise
             raise
         return DispatchLease(job_id=job_id, worker_id=node.node_id, command=command)
+
+    def renew(self, job_id: str, worker_id: str, lease_seconds: int = 300,
+              now: datetime | None = None) -> Lease | None:
+        """Renew both the queue lease and distributed coordination lease."""
+        job = self._owned_job(job_id, worker_id)
+        if lease_seconds <= 0:
+            raise ValueError("lease_seconds must be positive")
+        current = now or datetime.now(timezone.utc)
+        if current.tzinfo is None:
+            raise ValueError("now must be timezone-aware")
+        distributed_lease = self._job_leases.get(job_id)
+        if distributed_lease is None:
+            return None
+        renewed = self.lease_coordinator.renew(distributed_lease, lease_seconds, now=current)
+        self._job_leases[job_id] = renewed
+        return renewed
 
     def succeed(self, job_id: str, worker_id: str) -> Job:
         job = self._owned_job(job_id, worker_id)
         result = self.queue.succeed(job_id)
         self.command_ledger.finish(self._command_id(job), worker_id, True)
+        self._release_job_lease(job_id)
         self.nodes.release(worker_id)
         return result
 
@@ -93,6 +128,7 @@ class ControlPlane:
         job = self._owned_job(job_id, worker_id)
         result = self.queue.fail(job_id, error, retry=retry)
         self.command_ledger.finish(self._command_id(job), worker_id, False, error)
+        self._release_job_lease(job_id)
         self.nodes.release(worker_id)
         return result
 
@@ -102,6 +138,7 @@ class ControlPlane:
             raise DispatchError("worker does not own job")
         owner = job.worker_id
         result = self.queue.cancel(job_id)
+        self._release_job_lease(job_id)
         if owner is not None:
             self.nodes.release(owner)
         return result
@@ -113,6 +150,17 @@ class ControlPlane:
         if job.worker_id != worker_id:
             raise DispatchError("worker does not own job")
         return job
+
+    def _release_job_lease(self, job_id: str) -> None:
+        lease = self._job_leases.pop(job_id, None)
+        if lease is not None:
+            self._release_lease(lease)
+
+    def _release_lease(self, lease: Lease) -> None:
+        try:
+            self.lease_coordinator.release(lease)
+        except Exception as exc:
+            raise DispatchError("failed to release distributed job lease") from exc
 
     @staticmethod
     def _command_id(job: Job) -> str:
