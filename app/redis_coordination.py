@@ -6,6 +6,7 @@ coordination mechanism and must never contain platform credentials or tokens.
 
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
+from secrets import token_urlsafe
 
 
 @dataclass(frozen=True)
@@ -55,6 +56,11 @@ class InMemoryLeaseCoordinator:
         lease = Lease(key, owner, token, current + timedelta(seconds=ttl_seconds))
         self._leases[key] = lease
         return lease
+
+    def acquire_job(self, key: str, owner: str, ttl_seconds: int,
+                    now: datetime | None = None) -> Lease:
+        """Acquire a job lease using an opaque generated token."""
+        return self.acquire(key, owner, token_urlsafe(32), ttl_seconds, now=now)
 
     def renew(self, lease: Lease, ttl_seconds: int,
               now: datetime | None = None) -> Lease:
