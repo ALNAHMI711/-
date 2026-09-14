@@ -39,3 +39,19 @@ def test_repository_save_requires_existing_job():
     repo = InMemoryJobRepository()
     with pytest.raises(KeyError, match="job not found"):
         repo.save(job())
+
+
+def test_repository_rejects_empty_identity():
+    repo = InMemoryJobRepository()
+    with pytest.raises(ValueError):
+        repo.create(job(job_id="", key="k2"))
+
+
+def test_repository_save_can_change_idempotency_key_when_unique():
+    repo = InMemoryJobRepository()
+    created = repo.create(job())
+    updated = StoredJob(**{**created.__dict__, "idempotency_key": "k2"})
+    repo.save(updated)
+    assert repo.get("j1").idempotency_key == "k2"
+    with pytest.raises(KeyError):
+        repo.get("missing")
