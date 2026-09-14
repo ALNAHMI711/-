@@ -77,9 +77,11 @@ def test_wrong_worker_path_is_authentication_failure_and_handler_does_not_run():
 def test_expired_message_is_bad_request_and_handler_does_not_run():
     calls: list[str] = []
     client = TestClient(make_app(calls))
+    issued = NOW - timedelta(seconds=30)
     expired = NOW - timedelta(seconds=1)
     payload = signed_payload(
-        body=command_body(expires_at=expired),
+        body=command_body(issued_at=issued, expires_at=expired),
+        issued_at=issued,
         expires_at=expired,
     )
     response = client.post("/internal/workers/w1/messages", json=payload)
