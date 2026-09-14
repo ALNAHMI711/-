@@ -8,7 +8,10 @@ from typing import Callable, Mapping, Protocol
 from fastapi import FastAPI, HTTPException, Path
 from pydantic import BaseModel, ConfigDict, Field
 
+from .compute_nodes import ComputeNodeManager
+from .control_plane import ControlPlane
 from .replay_protection import InMemoryReplayGuard, ReplayGuard
+from .worker_command_handler import ExecuteCallback, WorkerCommandHandler
 from .worker_commands import CommandRejected, CommandType, WorkerCommand, WorkerCommandLedger
 from .worker_transport import TransportEnvelope, TransportRejected, validate_envelope
 
@@ -96,6 +99,20 @@ def _classify_rejection(error: TransportRejected) -> tuple[int, str]:
     if message == "message replay detected":
         return 409, "message replay detected"
     return 400, "invalid worker message"
+
+
+def create_control_plane_worker_handler(
+    control_plane: ControlPlane,
+    nodes: ComputeNodeManager,
+    execute_callback: ExecuteCallback | None = None,
+) -> WorkerCommandHandler:
+    """Build the application handler used by the worker HTTP boundary.
+
+    This is the integration point between authenticated transport and the
+    control plane. The callback receives a validated command, never raw HTTP
+    input or shell text.
+    """
+    return WorkerCommandHandler(control_plane, nodes, execute_callback)
 
 
 def create_worker_http_app(
