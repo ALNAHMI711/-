@@ -1,4 +1,4 @@
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 import pytest
 
@@ -57,7 +57,7 @@ def test_distributed_lease_conflict_blocks_dispatch_without_consuming_worker() -
 
     with pytest.raises(LeaseConflict, match="already held"):
         plane.dispatch("s1", now=NOW)
-    assert plane.queue.get("s1").state.value == "failed"
+    assert plane.queue.get("s1").state.value == "queued"
     assert plane.nodes.get("worker-1").current_jobs == 0
 
 
@@ -69,7 +69,7 @@ def test_distributed_lease_renews_with_queue_lease() -> None:
     renewed = plane.renew("s1", "worker-1", lease_seconds=120, now=NOW)
 
     assert renewed is not None
-    assert renewed.expires_at == NOW.replace(second=0) + __import__("datetime").timedelta(seconds=120)
+    assert renewed.expires_at == NOW + timedelta(seconds=120)
     assert plane.queue.get("s1").lease_until == renewed.expires_at
 
 
@@ -78,7 +78,7 @@ def test_failed_job_releases_distributed_lease_for_retry() -> None:
     plane = make_plane(coordinator)
     prepare_job(plane)
     plane.dispatch("s1", now=NOW)
-    job = plane.fail("s1", "temporary worker error", retry=True)
+    job = plane.fail("s1", "worker-1", "temporary worker error", retry=True)
 
     assert job.state.value == "queued"
     assert "job:s1" not in coordinator._leases
