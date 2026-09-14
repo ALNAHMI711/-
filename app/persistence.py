@@ -41,6 +41,8 @@ class InMemoryJobRepository:
         self._idempotency: dict[str, str] = {}
 
     def create(self, job: StoredJob) -> StoredJob:
+        if not job.job_id.strip() or not job.idempotency_key.strip():
+            raise ValueError("job_id and idempotency_key are required")
         if job.job_id in self._jobs or job.idempotency_key in self._idempotency:
             raise DuplicateStoredJob(job.job_id)
         self._jobs[job.job_id] = job
@@ -56,5 +58,12 @@ class InMemoryJobRepository:
     def save(self, job: StoredJob) -> StoredJob:
         if job.job_id not in self._jobs:
             raise KeyError(f"job not found: {job.job_id}")
+        existing = self._jobs[job.job_id]
+        if job.idempotency_key != existing.idempotency_key:
+            owner = self._idempotency.get(job.idempotency_key)
+            if owner is not None and owner != job.job_id:
+                raise DuplicateStoredJob(job.job_id)
+            self._idempotency.pop(existing.idempotency_key, None)
+            self._idempotency[job.idempotency_key] = job.job_id
         self._jobs[job.job_id] = job
         return job
