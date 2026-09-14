@@ -5,6 +5,8 @@ from datetime import datetime, timezone
 from hashlib import sha256
 from hmac import compare_digest, new
 
+from .replay_protection import ReplayGuard
+
 
 def _utc_timestamp(value: datetime) -> str:
     if value.tzinfo is None:
@@ -59,13 +61,27 @@ class TransportRejected(ValueError):
     """Raised when a worker message fails transport-level validation."""
 
 
-def validate_envelope(envelope: TransportEnvelope, expected_worker_id: str, secret: str, now: datetime | None = None) -> None:
+def validate_envelope(
+    envelope: TransportEnvelope,
+    expected_worker_id: str,
+    secret: str,
+    now: datetime | None = None,
+    replay_guard: ReplayGuard | None = None,
+) -> None:
+    """Validate identity, freshness and HMAC, then atomically consume the message ID."""
     if not expected_worker_id.strip() or envelope.worker_id != expected_worker_id:
         raise TransportRejected("worker identity mismatch")
-    if envelope.expired(now):
+    current = now or datetime.now(timezone.utc)
+    if current.tzinfo is None:
+        raise ValueError("now must be timezone-aware")
+    if envelope.expired(current):
         raise TransportRejected("message has expired")
     if not secret:
         raise TransportRejected("authentication secret is missing")
     expected_tag = sign_envelope(secret, envelope.message_id, envelope.worker_id, envelope.issued_at, envelope.expires_at, envelope.body)
     if not compare_digest(envelope.authentication_tag, expected_tag):
         raise TransportRejected("authentication failed")
+    if replay_guard is not None:
+        ttl_seconds = max(1, int((envelope.expires_at - current).total_seconds()))
+        if not replay_guard.claim(envelope.message_id, envelope.worker_id, ttl_seconds):
+            raise TransportRejected("message replay detected")
