@@ -69,12 +69,14 @@ class ControlPlane:
             raise DispatchError(str(exc)) from exc
 
         distributed_lease: Lease | None = None
+        claimed = False
         try:
             if self.lease_coordinator is not None:
                 distributed_lease = self.lease_coordinator.acquire_job(
                     f"job:{job_id}", node.node_id, lease_seconds, now=issued_at
                 )
             self.queue.claim(job_id, node.node_id, lease_seconds=lease_seconds, now=issued_at)
+            claimed = True
             command = WorkerCommand(
                 command_id=f"cmd:{job_id}:{job.attempts}",
                 command_type=CommandType.EXECUTE_JOB,
@@ -90,10 +92,11 @@ class ControlPlane:
         except Exception as exc:
             if distributed_lease is not None:
                 self._release_lease(distributed_lease)
-            try:
-                self.queue.fail(job_id, "worker dispatch setup failed", retry=False)
-            except Exception:
-                pass
+            if claimed:
+                try:
+                    self.queue.fail(job_id, "worker dispatch setup failed", retry=False)
+                except Exception:
+                    pass
             self.nodes.release(node.node_id)
             if isinstance(exc, DispatchError):
                 raise
@@ -103,7 +106,7 @@ class ControlPlane:
     def renew(self, job_id: str, worker_id: str, lease_seconds: int = 300,
               now: datetime | None = None) -> Lease | None:
         """Renew both the queue lease and distributed coordination lease."""
-        job = self._owned_job(job_id, worker_id)
+        self._owned_job(job_id, worker_id)
         if lease_seconds <= 0:
             raise ValueError("lease_seconds must be positive")
         current = now or datetime.now(timezone.utc)
