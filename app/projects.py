@@ -5,6 +5,7 @@ automation. The domain layer contains no provider credentials and no HTTP code.
 """
 
 from dataclasses import dataclass, field
+from typing import Protocol
 
 
 class ProjectError(ValueError):
@@ -29,8 +30,18 @@ class Project:
             raise ProjectError("language is required")
 
 
-class ProjectService:
-    """In-memory project service used until the durable project repository is added."""
+class ProjectRepository(Protocol):
+    """Storage contract for owner-scoped projects."""
+
+    def create(self, project: Project) -> Project: ...
+    def get(self, owner_id: str, project_id: str) -> Project | None: ...
+    def list_for_owner(self, owner_id: str) -> tuple[Project, ...]: ...
+    def save(self, project: Project) -> Project: ...
+    def delete(self, owner_id: str, project_id: str) -> None: ...
+
+
+class InMemoryProjectRepository:
+    """Development/test repository; data is lost when the process stops."""
 
     def __init__(self) -> None:
         self._projects: dict[str, Project] = {}
@@ -51,12 +62,10 @@ class ProjectService:
         owner = owner_id.strip()
         return tuple(project for project in self._projects.values() if project.owner_id == owner)
 
-    def update(self, owner_id: str, project: Project) -> Project:
-        existing = self.get(owner_id, project.project_id)
+    def save(self, project: Project) -> Project:
+        existing = self.get(project.owner_id, project.project_id)
         if existing is None:
             raise ProjectError("project does not belong to owner")
-        if project.owner_id != owner_id.strip():
-            raise ProjectError("project owner cannot be changed")
         self._projects[project.project_id] = project
         return project
 
@@ -64,3 +73,29 @@ class ProjectService:
         if self.get(owner_id, project_id) is None:
             raise ProjectError("project does not belong to owner")
         del self._projects[project_id]
+
+
+class ProjectService:
+    """Project application service backed by an injectable repository."""
+
+    def __init__(self, repository: ProjectRepository | None = None) -> None:
+        self._repository = repository or InMemoryProjectRepository()
+
+    def create(self, project: Project) -> Project:
+        return self._repository.create(project)
+
+    def get(self, owner_id: str, project_id: str) -> Project | None:
+        return self._repository.get(owner_id, project_id)
+
+    def list_for_owner(self, owner_id: str) -> tuple[Project, ...]:
+        return self._repository.list_for_owner(owner_id)
+
+    def update(self, owner_id: str, project: Project) -> Project:
+        if project.owner_id != owner_id.strip():
+            raise ProjectError("project owner cannot be changed")
+        if self.get(owner_id, project.project_id) is None:
+            raise ProjectError("project does not belong to owner")
+        return self._repository.save(project)
+
+    def delete(self, owner_id: str, project_id: str) -> None:
+        self._repository.delete(owner_id, project_id)
