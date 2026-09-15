@@ -2,13 +2,15 @@
 
 from dataclasses import dataclass
 from enum import StrEnum
-from typing import Mapping, Protocol
+from typing import Mapping, Protocol, TYPE_CHECKING
 
 from .account_connections import AccountConnection, ConnectionState, VerificationState
-from .account_linking import AccountLinkingError, AccountLinkingService, LinkRequest
 from .account_provider import AccountProvider, ProviderAPIError, ProviderAccount
 from .credential_vault import CredentialRef, CredentialVault
 from .oauth_session import OAuthState, OAuthStateStore
+
+if TYPE_CHECKING:
+    from .account_linking import AccountLinkingService
 
 
 class OAuthCallbackStatus(StrEnum):
@@ -75,21 +77,18 @@ def handle_oauth_callback(
             normalized_platform,
             error="منصة OAuth غير صالحة أو لا تطابق جلسة الربط.",
         )
-
     if not received_state.strip():
         return OAuthCallbackResult(
             OAuthCallbackStatus.INVALID_STATE,
             normalized_platform,
             error="حالة OAuth مفقودة؛ تم رفض الطلب.",
         )
-
     if not session_store.consume(expected_state, received_state, now=now):
         return OAuthCallbackResult(
             OAuthCallbackStatus.INVALID_STATE,
             normalized_platform,
             error="حالة OAuth غير صالحة أو منتهية أو مستخدمة مسبقًا.",
         )
-
     if error:
         detail = error_description.strip() if error_description else error.strip()
         return OAuthCallbackResult(
@@ -98,7 +97,6 @@ def handle_oauth_callback(
             expected_state,
             error=detail or "تم رفض التفويض من المنصة.",
         )
-
     return OAuthCallbackResult(OAuthCallbackStatus.LINKED, normalized_platform, expected_state)
 
 
@@ -135,18 +133,15 @@ def complete_oauth_link(
     exchanger: OAuthCodeExchanger,
     provider: AccountProvider,
     vault: CredentialVault,
-    account_service: AccountLinkingService,
+    account_service: "AccountLinkingService",
     required_permissions: tuple[str, ...] = (),
     error: str | None = None,
     error_description: str | None = None,
     now: float | None = None,
 ) -> OAuthCompletion:
-    """Run the complete server-side callback pipeline without exposing tokens.
+    """Run the complete server-side callback pipeline without exposing tokens."""
+    from .account_linking import AccountLinkingError, LinkRequest
 
-    Order is deliberate: consume state, exchange code, ask the provider for
-    authoritative identity/permissions, then store the credential and link only
-    safe metadata. A provider/API failure leaves the account unlinked.
-    """
     validation = handle_oauth_callback(
         platform=platform,
         expected_state=expected_state,
@@ -158,14 +153,13 @@ def complete_oauth_link(
     )
     if not validation.success:
         return OAuthCompletion(validation)
-    if not code.strip():
+    if not code.strip() or not redirect_uri.strip():
         return OAuthCompletion(OAuthCallbackResult(
             OAuthCallbackStatus.INVALID_REQUEST,
             validation.platform,
             expected_state,
-            error="authorization code is required",
+            error="authorization code and redirect_uri are required",
         ))
-
     try:
         token_set = exchanger.exchange_code(code.strip(), redirect_uri.strip())
         access_token = str(token_set.access_token)
