@@ -7,6 +7,7 @@ and provider tokens never cross the browser API.
 
 import os
 from dataclasses import dataclass
+from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
 from fastapi import APIRouter, HTTPException, Request
 
@@ -33,6 +34,14 @@ _ENV_CLIENT_IDS = {
     "tiktok": "TIKTOK_CLIENT_KEY",
     "linkedin": "LINKEDIN_CLIENT_ID",
 }
+
+
+def _with_state(url: str, state: str) -> str:
+    """Set exactly one OAuth state query parameter."""
+    parts = urlsplit(url)
+    params = [(key, value) for key, value in parse_qsl(parts.query, keep_blank_values=True) if key != "state"]
+    params.append(("state", state))
+    return urlunsplit((parts.scheme, parts.netloc, parts.path, urlencode(params), parts.fragment))
 
 
 def create_oauth_router(project_service: ProjectService, state_store: OAuthStateStore | None = None) -> APIRouter:
@@ -84,10 +93,7 @@ def create_oauth_router(project_service: ProjectService, state_store: OAuthState
                 ),
             )
             state = states.create(definition.key, user_id=user_id, project_id=project_id)
-            oauth = adapter.start()
-            # Replace the adapter-generated state with our server-side state.
-            separator = "&" if "?" in oauth.authorization_url else "?"
-            authorization_url = f"{oauth.authorization_url}{separator}state={state.value}"
+            authorization_url = _with_state(adapter.start().authorization_url, state.value)
             return {"platform": definition.key, "project_id": project_id, "state": state.value, "authorization_url": authorization_url}
         except HTTPException:
             raise
