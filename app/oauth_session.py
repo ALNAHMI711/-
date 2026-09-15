@@ -15,6 +15,8 @@ class OAuthState:
     created_at: float
     expires_at: float
     platform: str
+    user_id: str = ""
+    project_id: str = ""
 
 
 class OAuthStateStore:
@@ -30,14 +32,28 @@ class OAuthStateStore:
         self._ttl_seconds = ttl_seconds
         self._states: dict[str, OAuthState] = {}
 
-    def create(self, platform: str, now: float | None = None) -> OAuthState:
+    def create(
+        self,
+        platform: str,
+        now: float | None = None,
+        *,
+        user_id: str = "",
+        project_id: str = "",
+    ) -> OAuthState:
         timestamp = time.time() if now is None else now
+        normalized_platform = platform.strip().lower()
+        if not normalized_platform:
+            raise ValueError("platform is required")
+        if bool(user_id.strip()) != bool(project_id.strip()):
+            raise ValueError("user_id and project_id must be provided together")
         value = token_urlsafe(32)
         state = OAuthState(
             value=value,
             created_at=timestamp,
             expires_at=timestamp + self._ttl_seconds,
-            platform=platform.strip().lower(),
+            platform=normalized_platform,
+            user_id=user_id.strip(),
+            project_id=project_id.strip(),
         )
         self._states[value] = state
         return state
@@ -49,7 +65,16 @@ class OAuthStateStore:
             return False
         if stored.platform != expected.platform:
             return False
+        if stored.user_id != expected.user_id or stored.project_id != expected.project_id:
+            return False
         return compare_digest(stored.value, received)
+
+    def get(self, value: str, now: float | None = None) -> OAuthState | None:
+        timestamp = time.time() if now is None else now
+        state = self._states.get(value)
+        if state is None or timestamp > state.expires_at:
+            return None
+        return state
 
     def purge_expired(self, now: float | None = None) -> int:
         timestamp = time.time() if now is None else now
