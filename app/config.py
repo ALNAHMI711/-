@@ -10,6 +10,7 @@ class Settings:
     app_env: str = os.getenv("APP_ENV", "development")
     admin_password_hash: str = os.getenv("ADMIN_PASSWORD_HASH", "")
     session_ttl_seconds: int = int(os.getenv("SESSION_TTL_SECONDS", "3600"))
+    database_url: str = os.getenv("DATABASE_URL", "")
 
 
 settings = Settings()
