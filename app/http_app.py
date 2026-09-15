@@ -11,9 +11,15 @@ class LoginRequest(BaseModel):
     password: str
 
 
-def create_http_app(session_store: InMemorySessionStore | None = None) -> FastAPI:
+def create_http_app(
+    session_store: InMemorySessionStore | None = None,
+    admin_password_hash: str | None = None,
+    session_ttl_seconds: int | None = None,
+) -> FastAPI:
     app = FastAPI(title=settings.app_name, docs_url=None, redoc_url=None)
     sessions = session_store or InMemorySessionStore()
+    configured_password_hash = settings.admin_password_hash if admin_password_hash is None else admin_password_hash
+    ttl_seconds = settings.session_ttl_seconds if session_ttl_seconds is None else session_ttl_seconds
     cookie_secure = settings.app_env.lower() not in {"development", "test"}
     cookie_name = "mashahid_session"
 
@@ -31,23 +37,23 @@ def create_http_app(session_store: InMemorySessionStore | None = None) -> FastAP
 
     @app.get("/readyz")
     def readyz() -> dict[str, str]:
-        status = "ready" if settings.admin_password_hash else "not_configured"
+        status = "ready" if configured_password_hash else "not_configured"
         return {"status": status, "environment": settings.app_env}
 
     @app.post("/auth/login")
     def login(payload: LoginRequest, response: Response) -> dict[str, str]:
-        if not settings.admin_password_hash:
+        if not configured_password_hash:
             raise HTTPException(status_code=503, detail="authentication is not configured")
-        if not verify_password(payload.password, settings.admin_password_hash):
+        if not verify_password(payload.password, configured_password_hash):
             raise HTTPException(status_code=401, detail="invalid credentials")
-        _, token = sessions.create_with_token("admin", settings.session_ttl_seconds)
+        _, token = sessions.create_with_token("admin", ttl_seconds)
         response.set_cookie(
             cookie_name,
             token,
             httponly=True,
             secure=cookie_secure,
             samesite="strict",
-            max_age=settings.session_ttl_seconds,
+            max_age=ttl_seconds,
             path="/",
         )
         return {"status": "authenticated"}
