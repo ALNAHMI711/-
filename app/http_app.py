@@ -5,6 +5,7 @@ from pydantic import BaseModel
 
 from .auth import AuthenticationError, InMemorySessionStore, verify_password
 from .config import settings
+from .postgres_projects import PostgresProjectRepository
 from .postgres_sessions import PostgresSessionStore
 from .project_api import create_project_router
 from .projects import ProjectService
@@ -27,7 +28,11 @@ def create_http_app(
         sessions = PostgresSessionStore(settings.database_url)
     else:
         sessions = InMemorySessionStore()
-    projects = project_service or ProjectService()
+    projects = project_service or ProjectService(
+        repository=PostgresProjectRepository(settings.database_url)
+        if settings.database_url
+        else None
+    )
     configured_password_hash = settings.admin_password_hash if admin_password_hash is None else admin_password_hash
     ttl_seconds = settings.session_ttl_seconds if session_ttl_seconds is None else session_ttl_seconds
     cookie_secure = settings.app_env.lower() not in {"development", "test"}
