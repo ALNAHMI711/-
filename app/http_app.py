@@ -1,4 +1,4 @@
-"""Public application HTTP surface with health, authentication, projects, and accounts."""
+"""Public application HTTP surface with health, authentication, projects, accounts, and OAuth."""
 
 from fastapi import FastAPI, HTTPException, Request, Response
 from pydantic import BaseModel
@@ -7,6 +7,8 @@ from .account_api import create_account_router
 from .account_linking import AccountLinkingService
 from .auth import AuthenticationError, InMemorySessionStore, verify_password
 from .config import settings
+from .oauth_api import create_oauth_router
+from .oauth_session import OAuthStateStore
 from .postgres_projects import PostgresProjectRepository
 from .postgres_sessions import PostgresSessionStore
 from .project_api import create_project_router
@@ -23,6 +25,7 @@ def create_http_app(
     session_ttl_seconds: int | None = None,
     project_service: ProjectService | None = None,
     account_service: AccountLinkingService | None = None,
+    oauth_state_store: OAuthStateStore | None = None,
 ) -> FastAPI:
     app = FastAPI(title=settings.app_name, docs_url=None, redoc_url=None)
     if session_store is not None:
@@ -95,6 +98,7 @@ def create_http_app(
 
     app.include_router(create_project_router(projects))
     app.include_router(create_account_router(accounts, projects))
+    app.include_router(create_oauth_router(projects, oauth_state_store))
     return app
 
 
