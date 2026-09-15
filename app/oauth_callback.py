@@ -2,9 +2,12 @@
 
 from dataclasses import dataclass
 from enum import StrEnum
-from typing import Mapping
+from typing import Mapping, Protocol
 
 from .account_connections import AccountConnection, ConnectionState, VerificationState
+from .account_linking import AccountLinkingError, AccountLinkingService, LinkRequest
+from .account_provider import AccountProvider, ProviderAPIError, ProviderAccount
+from .credential_vault import CredentialRef, CredentialVault
 from .oauth_session import OAuthState, OAuthStateStore
 
 
@@ -22,6 +25,8 @@ class OAuthCallbackResult:
     platform: str
     state: OAuthState | None = None
     error: str | None = None
+    account: AccountConnection | None = None
+    credential: CredentialRef | None = None
 
     @property
     def success(self) -> bool:
@@ -105,3 +110,103 @@ def parse_callback_params(params: Mapping[str, str]) -> tuple[str, str, str | No
         str(params.get("error", "")) or None,
         str(params.get("error_description", "")) or None,
     )
+
+
+class OAuthCodeExchanger(Protocol):
+    """Provider-specific server-side authorization-code exchange."""
+
+    def exchange_code(self, code: str, redirect_uri: str): ...
+
+
+@dataclass(frozen=True)
+class OAuthCompletion:
+    result: OAuthCallbackResult
+    provider_account: ProviderAccount | None = None
+
+
+def complete_oauth_link(
+    *,
+    platform: str,
+    expected_state: OAuthState,
+    received_state: str,
+    code: str,
+    redirect_uri: str,
+    state_store: OAuthStateStore,
+    exchanger: OAuthCodeExchanger,
+    provider: AccountProvider,
+    vault: CredentialVault,
+    account_service: AccountLinkingService,
+    required_permissions: tuple[str, ...] = (),
+    error: str | None = None,
+    error_description: str | None = None,
+    now: float | None = None,
+) -> OAuthCompletion:
+    """Run the complete server-side callback pipeline without exposing tokens.
+
+    Order is deliberate: consume state, exchange code, ask the provider for
+    authoritative identity/permissions, then store the credential and link only
+    safe metadata. A provider/API failure leaves the account unlinked.
+    """
+    validation = handle_oauth_callback(
+        platform=platform,
+        expected_state=expected_state,
+        received_state=received_state,
+        session_store=state_store,
+        error=error,
+        error_description=error_description,
+        now=now,
+    )
+    if not validation.success:
+        return OAuthCompletion(validation)
+    if not code.strip():
+        return OAuthCompletion(OAuthCallbackResult(
+            OAuthCallbackStatus.INVALID_REQUEST,
+            validation.platform,
+            expected_state,
+            error="authorization code is required",
+        ))
+
+    try:
+        token_set = exchanger.exchange_code(code.strip(), redirect_uri.strip())
+        access_token = str(token_set.access_token)
+        provider_account = provider.get_account(access_token)
+        verification = provider.verify_permissions(access_token, required_permissions)
+        if not verification.verified:
+            return OAuthCompletion(OAuthCallbackResult(
+                OAuthCallbackStatus.PROVIDER_ERROR,
+                validation.platform,
+                expected_state,
+                error="required permissions are missing",
+            ), provider_account)
+        credential = vault.put(
+            platform=validation.platform,
+            account_id=provider_account.account_id,
+            access_token=access_token,
+            refresh_token=token_set.refresh_token,
+            scopes=verification.permissions,
+            expires_at=token_set.expires_at,
+        )
+        linked = LinkedAccount(
+            account_id=provider_account.account_id,
+            platform=validation.platform,
+            project_id=expected_state.project_id,
+            display_name=provider_account.display_name,
+            permissions=verification.permissions,
+            connection_state=ConnectionState.CONNECTED,
+            verification_state=VerificationState.VERIFIED,
+        )
+        account = account_service.link(LinkRequest(project_id=expected_state.project_id, account=linked))
+        return OAuthCompletion(OAuthCallbackResult(
+            OAuthCallbackStatus.LINKED,
+            validation.platform,
+            expected_state,
+            account=account,
+            credential=credential,
+        ), provider_account)
+    except (ProviderAPIError, AccountLinkingError, ValueError, RuntimeError) as exc:
+        return OAuthCompletion(OAuthCallbackResult(
+            OAuthCallbackStatus.PROVIDER_ERROR,
+            validation.platform,
+            expected_state,
+            error=str(exc) or "provider integration failed",
+        ))
