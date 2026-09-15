@@ -1,30 +1,22 @@
-"""Authenticated account connection API.
+"""Authenticated account-connection API.
 
-This API exposes safe connection metadata only. Provider passwords and raw OAuth
-credentials never enter the HTTP/domain model; token exchange belongs to a
-provider adapter and credential vault integration.
+Only safe account metadata is exposed here. Provider passwords and raw OAuth
+credentials never enter this API; real verification belongs to provider adapters.
 """
 
 from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel, Field
 
-from .account_connections import (
-    AccountConnection,
-    ConnectionState,
-    MonetizationState,
-    VerificationState,
-)
+from .account_connections import AccountConnection, ConnectionState
 from .account_linking import AccountLinkingError, AccountLinkingService, LinkRequest
 from .oauth_callback import LinkedAccount
+from .projects import ProjectService
 
 
 class AccountPayload(BaseModel):
     account_id: str = Field(min_length=1, max_length=200)
     platform: str = Field(min_length=1, max_length=64)
     display_name: str = Field(default="", max_length=300)
-    connection_state: ConnectionState = ConnectionState.PENDING
-    verification_state: VerificationState = VerificationState.NOT_CHECKED
-    monetization_state: MonetizationState = MonetizationState.UNKNOWN
     permissions: list[str] = Field(default_factory=list, max_length=100)
 
 
@@ -35,18 +27,26 @@ def _owner_id(request: Request) -> str:
     return session.user_id
 
 
-def create_account_router(service: AccountLinkingService) -> APIRouter:
+def _owned_project(request: Request, project_service: ProjectService, project_id: str) -> None:
+    owner_id = _owner_id(request)
+    if project_service.get(owner_id, project_id) is None:
+        raise HTTPException(status_code=404, detail="project not found")
+
+
+def create_account_router(
+    service: AccountLinkingService,
+    project_service: ProjectService,
+) -> APIRouter:
     router = APIRouter(prefix="/api/projects/{project_id}/accounts", tags=["accounts"])
 
     @router.get("")
     def list_accounts(project_id: str, request: Request) -> list[AccountConnection]:
-        # The owner check is intentionally explicit; account service is project-scoped.
-        _owner_id(request)
+        _owned_project(request, project_service, project_id)
         return list(service.list_for_project(project_id))
 
     @router.get("/{account_id}")
     def get_account(project_id: str, account_id: str, request: Request) -> AccountConnection:
-        _owner_id(request)
+        _owned_project(request, project_service, project_id)
         account = service.get(project_id, account_id)
         if account is None:
             raise HTTPException(status_code=404, detail="account not found")
@@ -54,7 +54,7 @@ def create_account_router(service: AccountLinkingService) -> APIRouter:
 
     @router.post("", status_code=201)
     def link_account(project_id: str, payload: AccountPayload, request: Request) -> AccountConnection:
-        _owner_id(request)
+        _owned_project(request, project_service, project_id)
         try:
             linked = LinkedAccount(
                 account_id=payload.account_id,
@@ -62,25 +62,15 @@ def create_account_router(service: AccountLinkingService) -> APIRouter:
                 display_name=payload.display_name,
                 project_id=project_id,
                 permissions=tuple(payload.permissions),
-                connection_state=payload.connection_state,
-                verification_state=payload.verification_state,
-                monetization_state=payload.monetization_state,
+                connection_state=ConnectionState.PENDING,
             )
             return service.link(LinkRequest(project_id=project_id, account=linked))
         except (AccountLinkingError, ValueError) as exc:
             raise HTTPException(status_code=409, detail=str(exc)) from None
 
-    @router.post("/{account_id}/verify")
-    def verify_account(project_id: str, account_id: str, request: Request) -> AccountConnection:
-        _owner_id(request)
-        try:
-            return service.mark_verified(project_id, account_id)
-        except AccountLinkingError as exc:
-            raise HTTPException(status_code=404, detail=str(exc)) from None
-
     @router.delete("/{account_id}", status_code=204)
     def disconnect_account(project_id: str, account_id: str, request: Request) -> None:
-        _owner_id(request)
+        _owned_project(request, project_service, project_id)
         try:
             service.disconnect(project_id, account_id)
         except AccountLinkingError as exc:
