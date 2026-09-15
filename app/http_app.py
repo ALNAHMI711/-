@@ -1,10 +1,12 @@
-"""Public application HTTP surface with health and authentication endpoints."""
+"""Public application HTTP surface with health, authentication, and projects."""
 
 from fastapi import FastAPI, HTTPException, Request, Response
 from pydantic import BaseModel
 
 from .auth import AuthenticationError, InMemorySessionStore, verify_password
 from .config import settings
+from .project_api import create_project_router
+from .projects import ProjectService
 
 
 class LoginRequest(BaseModel):
@@ -15,16 +17,26 @@ def create_http_app(
     session_store: InMemorySessionStore | None = None,
     admin_password_hash: str | None = None,
     session_ttl_seconds: int | None = None,
+    project_service: ProjectService | None = None,
 ) -> FastAPI:
     app = FastAPI(title=settings.app_name, docs_url=None, redoc_url=None)
     sessions = session_store or InMemorySessionStore()
+    projects = project_service or ProjectService()
     configured_password_hash = settings.admin_password_hash if admin_password_hash is None else admin_password_hash
     ttl_seconds = settings.session_ttl_seconds if session_ttl_seconds is None else session_ttl_seconds
     cookie_secure = settings.app_env.lower() not in {"development", "test"}
     cookie_name = "mashahid_session"
 
     @app.middleware("http")
-    async def security_headers(request: Request, call_next):
+    async def security_and_session(request: Request, call_next):
+        token = request.cookies.get(cookie_name)
+        if token:
+            try:
+                request.state.session = sessions.validate_token(token)
+            except (AuthenticationError, ValueError):
+                request.state.session = None
+        else:
+            request.state.session = None
         response = await call_next(request)
         response.headers["X-Content-Type-Options"] = "nosniff"
         response.headers["X-Frame-Options"] = "DENY"
@@ -68,15 +80,12 @@ def create_http_app(
 
     @app.get("/auth/me")
     def me(request: Request) -> dict[str, str]:
-        token = request.cookies.get(cookie_name)
-        if not token:
+        session = getattr(request.state, "session", None)
+        if session is None:
             raise HTTPException(status_code=401, detail="authentication required")
-        try:
-            session = sessions.validate_token(token)
-        except (AuthenticationError, ValueError):
-            raise HTTPException(status_code=401, detail="authentication required") from None
         return {"user_id": session.user_id, "status": "authenticated"}
 
+    app.include_router(create_project_router(projects))
     return app
 
 
