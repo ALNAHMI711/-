@@ -1,9 +1,8 @@
--- Durable authentication sessions. Store only a SHA-256 token identifier and
--- an encrypted-at-rest/opaque token value; never store provider passwords here.
+-- Durable authentication sessions. The bearer token is never persisted.
+-- Store only its SHA-256 identifier; provider passwords/OAuth secrets belong elsewhere.
 CREATE TABLE IF NOT EXISTS sessions (
     session_id TEXT PRIMARY KEY,
     user_id TEXT NOT NULL,
-    token TEXT NOT NULL,
     expires_at TIMESTAMPTZ NOT NULL,
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
