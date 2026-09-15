@@ -5,6 +5,7 @@ from pydantic import BaseModel
 
 from .auth import AuthenticationError, InMemorySessionStore, verify_password
 from .config import settings
+from .postgres_sessions import PostgresSessionStore
 from .project_api import create_project_router
 from .projects import ProjectService
 
@@ -14,13 +15,18 @@ class LoginRequest(BaseModel):
 
 
 def create_http_app(
-    session_store: InMemorySessionStore | None = None,
+    session_store=None,
     admin_password_hash: str | None = None,
     session_ttl_seconds: int | None = None,
     project_service: ProjectService | None = None,
 ) -> FastAPI:
     app = FastAPI(title=settings.app_name, docs_url=None, redoc_url=None)
-    sessions = session_store or InMemorySessionStore()
+    if session_store is not None:
+        sessions = session_store
+    elif settings.database_url:
+        sessions = PostgresSessionStore(settings.database_url)
+    else:
+        sessions = InMemorySessionStore()
     projects = project_service or ProjectService()
     configured_password_hash = settings.admin_password_hash if admin_password_hash is None else admin_password_hash
     ttl_seconds = settings.session_ttl_seconds if session_ttl_seconds is None else session_ttl_seconds
@@ -59,15 +65,8 @@ def create_http_app(
         if not verify_password(payload.password, configured_password_hash):
             raise HTTPException(status_code=401, detail="invalid credentials")
         _, token = sessions.create_with_token("admin", ttl_seconds)
-        response.set_cookie(
-            cookie_name,
-            token,
-            httponly=True,
-            secure=cookie_secure,
-            samesite="strict",
-            max_age=ttl_seconds,
-            path="/",
-        )
+        response.set_cookie(cookie_name, token, httponly=True, secure=cookie_secure,
+                            samesite="strict", max_age=ttl_seconds, path="/")
         return {"status": "authenticated"}
 
     @app.post("/auth/logout")
