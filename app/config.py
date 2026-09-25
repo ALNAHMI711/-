@@ -11,6 +11,7 @@ class Settings:
     admin_password_hash: str = os.getenv("ADMIN_PASSWORD_HASH", "")
     session_ttl_seconds: int = int(os.getenv("SESSION_TTL_SECONDS", "3600"))
     database_url: str = os.getenv("DATABASE_URL", "")
+    redis_url: str = os.getenv("REDIS_URL", "")
 
 
 settings = Settings()
