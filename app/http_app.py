@@ -2,6 +2,8 @@
 
 import os
 
+import redis
+
 from fastapi import FastAPI, HTTPException, Request, Response
 from pydantic import BaseModel
 
@@ -12,6 +14,7 @@ from .config import settings
 from .oauth_api import create_oauth_router
 from .oauth_callback import OAuthCallbackStatus, complete_oauth_link, parse_callback_params
 from .oauth_session import OAuthStateStore
+from .redis_oauth_state import RedisOAuthStateStore
 from .postgres_accounts import PostgresAccountRepository
 from .postgres_projects import PostgresProjectRepository
 from .postgres_sessions import PostgresSessionStore
@@ -29,7 +32,7 @@ def create_http_app(
     session_ttl_seconds: int | None = None,
     project_service: ProjectService | None = None,
     account_service: AccountLinkingService | None = None,
-    oauth_state_store: OAuthStateStore | None = None,
+    oauth_state_store: OAuthStateStore | RedisOAuthStateStore | None = None,
     oauth_exchangers: dict[str, object] | None = None,
     oauth_providers: dict[str, object] | None = None,
     credential_vault=None,
@@ -54,7 +57,12 @@ def create_http_app(
         else None
     )
 
-    oauth_states = oauth_state_store or OAuthStateStore()
+    if oauth_state_store is not None:
+        oauth_states = oauth_state_store
+    elif settings.redis_url:
+        oauth_states = RedisOAuthStateStore(redis.from_url(settings.redis_url))
+    else:
+        oauth_states = OAuthStateStore()
     exchangers = oauth_exchangers or {}
     providers = oauth_providers or {}
     configured_password_hash = (
