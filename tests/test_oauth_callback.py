@@ -24,6 +24,7 @@ class FakeExchanger:
             token_type="Bearer",
             refresh_token="refresh-secret",
             expires_at=datetime(2030, 1, 1, tzinfo=timezone.utc),
+            scope=("scope.write",),
         )
 
 
@@ -106,6 +107,38 @@ def test_complete_callback_exchanges_server_side_stores_secret_and_links_safe_me
     assert accounts.get("project-1", "channel-1") is not None
     assert vault.get_secret(completion.result.credential) == ("access-secret", "refresh-secret")
     assert "access-secret" not in repr(completion.result.account)
+
+
+def test_complete_callback_rejects_token_scope_missing_required_permission():
+    states = OAuthStateStore()
+    state = states.create("youtube", now=100.0, user_id="admin", project_id="project-1")
+    vault = InMemoryCredentialVault()
+
+    class ScopeLimitedExchanger(FakeExchanger):
+        def exchange_code(self, code, redirect_uri):
+            return OAuthTokenBundle(
+                access_token="access-secret",
+                token_type="Bearer",
+                expires_at=datetime(2030, 1, 1, tzinfo=timezone.utc),
+                scope=("scope.read",),
+            )
+
+    result = complete_oauth_link(
+        platform="youtube",
+        expected_state=state,
+        received_state=state.value,
+        code="code",
+        redirect_uri="https://example.test/oauth/callback/youtube",
+        state_store=states,
+        exchanger=ScopeLimitedExchanger(),
+        provider=FakeProvider(),
+        vault=vault,
+        account_service=AccountLinkingService(),
+        required_permissions=("scope.write",),
+        now=100.0,
+    )
+    assert result.result.status == OAuthCallbackStatus.PROVIDER_ERROR
+    assert result.result.credential is None
 
 
 def test_complete_callback_does_not_store_credentials_when_permissions_fail():
