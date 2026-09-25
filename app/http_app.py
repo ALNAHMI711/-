@@ -4,6 +4,8 @@ import os
 
 import redis
 
+import redis
+
 from fastapi import FastAPI, HTTPException, Request, Response
 from pydantic import BaseModel
 
@@ -14,6 +16,7 @@ from .config import settings
 from .oauth_api import create_oauth_router
 from .oauth_callback import OAuthCallbackStatus, complete_oauth_link, parse_callback_params
 from .oauth_session import OAuthStateStore
+from .redis_oauth_state import RedisOAuthStateStore
 from .redis_oauth_state import RedisOAuthStateStore
 from .postgres_accounts import PostgresAccountRepository
 from .postgres_projects import PostgresProjectRepository
