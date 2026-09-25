@@ -18,6 +18,7 @@ class AccountLinkingError(ValueError):
 class AccountRepository(Protocol):
     def create(self, account: AccountConnection) -> AccountConnection: ...
     def get(self, project_id: str, account_id: str) -> AccountConnection | None: ...
+    def find_by_account_id(self, account_id: str) -> AccountConnection | None: ...
     def list_for_project(self, project_id: str) -> tuple[AccountConnection, ...]: ...
     def save(self, account: AccountConnection) -> AccountConnection: ...
     def delete(self, project_id: str, account_id: str) -> None: ...
@@ -30,6 +31,8 @@ class InMemoryAccountRepository:
         self._accounts: dict[str, AccountConnection] = {}
 
     def create(self, account: AccountConnection) -> AccountConnection:
+        if account.account_id in self._accounts:
+            raise KeyError("account already exists")
         self._accounts[account.account_id] = account
         return account
 
@@ -39,6 +42,9 @@ class InMemoryAccountRepository:
             return None
         return account
 
+    def find_by_account_id(self, account_id: str) -> AccountConnection | None:
+        return self._accounts.get(account_id)
+
     def list_for_project(self, project_id: str) -> tuple[AccountConnection, ...]:
         normalized = project_id.strip()
         return tuple(
@@ -47,6 +53,8 @@ class InMemoryAccountRepository:
         )
 
     def save(self, account: AccountConnection) -> AccountConnection:
+        if account.account_id not in self._accounts:
+            raise KeyError("account not found")
         self._accounts[account.account_id] = account
         return account
 
@@ -78,13 +86,12 @@ class AccountLinkingService:
         if not account.account_id.strip() or not account.platform.strip():
             raise AccountLinkingError("بيانات الحساب الأساسية غير مكتملة.")
 
-        existing = self._repository.get(project_id, account.account_id)
+        existing = self._repository.find_by_account_id(account.account_id)
         if existing is not None:
+            if existing.project_id != project_id:
+                raise AccountLinkingError("الحساب مرتبط بمشروع آخر ولا يمكن نقله ضمن هذه العملية.")
             raise AccountLinkingError("الحساب مرتبط بالفعل بهذا المشروع.")
 
-        # Reject an account identity already owned by another project.
-        # Repositories are intentionally project-scoped, so this check is handled
-        # by the durable unique account_id constraint in production.
         connection = account.to_connection()
         try:
             return self._repository.create(connection)
