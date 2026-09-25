@@ -12,6 +12,7 @@ from .config import settings
 from .oauth_api import create_oauth_router
 from .oauth_callback import OAuthCallbackStatus, complete_oauth_link, parse_callback_params
 from .oauth_session import OAuthStateStore
+from .postgres_accounts import PostgresAccountRepository
 from .postgres_projects import PostgresProjectRepository
 from .postgres_sessions import PostgresSessionStore
 from .project_api import create_project_router
@@ -40,16 +41,25 @@ def create_http_app(
         sessions = PostgresSessionStore(settings.database_url)
     else:
         sessions = InMemorySessionStore()
+
     projects = project_service or ProjectService(
         repository=PostgresProjectRepository(settings.database_url)
         if settings.database_url
         else None
     )
-    accounts = account_service or AccountLinkingService()
+
+    accounts = account_service or AccountLinkingService(
+        repository=PostgresAccountRepository(settings.database_url)
+        if settings.database_url
+        else None
+    )
+
     oauth_states = oauth_state_store or OAuthStateStore()
     exchangers = oauth_exchangers or {}
     providers = oauth_providers or {}
-    configured_password_hash = settings.admin_password_hash if admin_password_hash is None else admin_password_hash
+    configured_password_hash = (
+        settings.admin_password_hash if admin_password_hash is None else admin_password_hash
+    )
     ttl_seconds = settings.session_ttl_seconds if session_ttl_seconds is None else session_ttl_seconds
     cookie_secure = settings.app_env.lower() not in {"development", "test"}
     cookie_name = "mashahid_session"
@@ -86,8 +96,15 @@ def create_http_app(
         if not verify_password(payload.password, configured_password_hash):
             raise HTTPException(status_code=401, detail="invalid credentials")
         _, token = sessions.create_with_token("admin", ttl_seconds)
-        response.set_cookie(cookie_name, token, httponly=True, secure=cookie_secure,
-                            samesite="strict", max_age=ttl_seconds, path="/")
+        response.set_cookie(
+            cookie_name,
+            token,
+            httponly=True,
+            secure=cookie_secure,
+            samesite="strict",
+            max_age=ttl_seconds,
+            path="/",
+        )
         return {"status": "authenticated"}
 
     @app.post("/auth/logout")
@@ -115,7 +132,10 @@ def create_http_app(
         provider = providers.get(expected_state.platform)
         if exchanger is None or provider is None or credential_vault is None:
             raise HTTPException(status_code=503, detail="OAuth provider is not configured")
-        redirect_uri = f"{os.getenv('APP_URL', 'http://localhost:8000').rstrip('/')}/oauth/callback/{expected_state.platform}"
+        redirect_uri = (
+            f"{os.getenv('APP_URL', 'http://localhost:8000').rstrip('/')}"
+            f"/oauth/callback/{expected_state.platform}"
+        )
         completion = complete_oauth_link(
             platform=platform,
             expected_state=expected_state,
