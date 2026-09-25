@@ -11,6 +11,7 @@ from .account_connections import AccountConnection, ConnectionState
 from .account_linking import AccountLinkingError, AccountLinkingService, LinkRequest
 from .oauth_callback import LinkedAccount
 from .projects import ProjectService
+from .platforms import get_platform, UnsupportedPlatform
 
 
 class AccountPayload(BaseModel):
@@ -67,6 +68,31 @@ def create_account_router(
             return service.link(LinkRequest(project_id=project_id, account=linked))
         except (AccountLinkingError, ValueError) as exc:
             raise HTTPException(status_code=409, detail=str(exc)) from None
+
+    @router.get("/{account_id}/readiness")
+    def account_readiness(project_id: str, account_id: str, request: Request) -> dict[str, object]:
+        _owned_project(request, project_service, project_id)
+        account = service.get(project_id, account_id)
+        if account is None:
+            raise HTTPException(status_code=404, detail="account not found")
+        try:
+            platform = get_platform(account.platform)
+        except UnsupportedPlatform:
+            raise HTTPException(status_code=404, detail="unsupported platform") from None
+        return {
+            "account_id": account.account_id,
+            "platform": platform.key,
+            "display_name": account.display_name,
+            "connection_state": account.connection_state.value,
+            "verification_state": account.verification_state.value,
+            "monetization_state": account.monetization_state.value,
+            "ready_to_publish": account.ready_to_publish,
+            "needs_user_action": account.needs_user_action,
+            "required_scopes": list(platform.required_scopes),
+            "monetization_status_supported": platform.monetization_status_supported,
+            "monetization_url": platform.monetization_url,
+            "last_error": account.last_error,
+        }
 
     @router.delete("/{account_id}", status_code=204)
     def disconnect_account(project_id: str, account_id: str, request: Request) -> None:
