@@ -5,12 +5,12 @@ from app.account_provider import ProviderAccount, ProviderVerification
 from app.credential_vault import InMemoryCredentialVault
 from app.oauth_callback import (
     OAuthCallbackStatus,
-    OAuthTokenSet,
     complete_oauth_link,
     handle_oauth_callback,
     parse_callback_params,
 )
 from app.oauth_session import OAuthStateStore
+from app.oauth_token_exchange import OAuthTokenBundle
 
 
 class FakeExchanger:
@@ -19,8 +19,9 @@ class FakeExchanger:
 
     def exchange_code(self, code, redirect_uri):
         self.calls.append((code, redirect_uri))
-        return OAuthTokenSet(
+        return OAuthTokenBundle(
             access_token="access-secret",
+            token_type="Bearer",
             refresh_token="refresh-secret",
             expires_at=datetime(2030, 1, 1, tzinfo=timezone.utc),
         )
