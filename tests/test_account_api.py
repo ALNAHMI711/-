@@ -56,3 +56,23 @@ def test_account_disconnect():
     assert client.delete("/api/projects/p1/accounts/ig-1").status_code == 204
     assert client.get("/api/projects/p1/accounts/ig-1").status_code == 200
     assert client.get("/api/projects/p1/accounts/ig-1").json()["connection_state"] == "disconnected"
+
+
+def test_account_readiness_exposes_safe_platform_and_monetization_metadata():
+    client = _client()
+    created = client.post("/api/projects/p1/accounts", json={
+        "account_id": "yt-1",
+        "platform": "youtube",
+        "display_name": "Funny Channel",
+        "permissions": ["https://www.googleapis.com/auth/youtube.upload"],
+    })
+    assert created.status_code == 201
+    readiness = client.get("/api/projects/p1/accounts/yt-1/readiness")
+    assert readiness.status_code == 200
+    body = readiness.json()
+    assert body["platform"] == "youtube"
+    assert body["connection_state"] == "pending"
+    assert body["ready_to_publish"] is False
+    assert body["monetization_status_supported"] is False
+    assert body["monetization_url"].startswith("https://")
+    assert "access_token" not in readiness.text
