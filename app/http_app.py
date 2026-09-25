@@ -4,8 +4,6 @@ import os
 
 import redis
 
-import redis
-
 from fastapi import FastAPI, HTTPException, Request, Response
 from pydantic import BaseModel
 
@@ -17,10 +15,10 @@ from .oauth_api import create_oauth_router
 from .oauth_callback import OAuthCallbackStatus, complete_oauth_link, parse_callback_params
 from .oauth_session import OAuthStateStore
 from .redis_oauth_state import RedisOAuthStateStore
-from .redis_oauth_state import RedisOAuthStateStore
 from .postgres_accounts import PostgresAccountRepository
 from .postgres_projects import PostgresProjectRepository
 from .postgres_sessions import PostgresSessionStore
+from .platforms import get_platform
 from .project_api import create_project_router
 from .projects import ProjectService
 
@@ -158,6 +156,7 @@ def create_http_app(
             provider=provider,
             vault=credential_vault,
             account_service=accounts,
+            required_permissions=get_platform(expected_state.platform).required_scopes,
             error=error,
             error_description=error_description,
         )
