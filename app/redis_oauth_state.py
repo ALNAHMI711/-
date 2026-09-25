@@ -111,7 +111,7 @@ class RedisOAuthStateStore:
                 _CONSUME,
                 1,
                 f"{self._prefix}{expected.value}",
-                expected.value,
+                "\x1f".join((expected.platform, expected.user_id, expected.project_id, str(expected.created_at))),
             )
         )
 
