@@ -165,6 +165,15 @@ def complete_oauth_link(
         access_token = str(token_set.access_token)
         provider_account = provider.get_account(access_token)
         verification = provider.verify_permissions(access_token, required_permissions)
+        granted_scopes = tuple(sorted(set(token_set.scope)))
+        if granted_scopes and not set(required_permissions).issubset(granted_scopes):
+            missing = tuple(sorted(set(required_permissions) - set(granted_scopes)))
+            return OAuthCompletion(OAuthCallbackResult(
+                OAuthCallbackStatus.PROVIDER_ERROR,
+                validation.platform,
+                expected_state,
+                error="required permissions are missing: " + ", ".join(missing),
+            ), provider_account)
         if not verification.verified:
             return OAuthCompletion(OAuthCallbackResult(
                 OAuthCallbackStatus.PROVIDER_ERROR,
@@ -177,7 +186,7 @@ def complete_oauth_link(
             account_id=provider_account.account_id,
             access_token=access_token,
             refresh_token=token_set.refresh_token,
-            scopes=verification.permissions,
+            scopes=granted_scopes or verification.permissions,
             expires_at=token_set.expires_at,
         )
         linked = LinkedAccount(
@@ -185,7 +194,7 @@ def complete_oauth_link(
             platform=validation.platform,
             project_id=expected_state.project_id,
             display_name=provider_account.display_name,
-            permissions=verification.permissions,
+            permissions=granted_scopes or verification.permissions,
             connection_state=ConnectionState.CONNECTED,
             verification_state=VerificationState.VERIFIED,
         )
