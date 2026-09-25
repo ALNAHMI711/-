@@ -86,6 +86,22 @@ class PostgresAccountRepository:
                 row = cur.fetchone()
                 return None if row is None else self._from_row(row)
 
+    def find_by_account_id(self, account_id: str) -> AccountConnection | None:
+        with self._connect() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    SELECT account_id, platform, display_name, project_id,
+                           connection_state, verification_state,
+                           monetization_state, permissions, last_error
+                    FROM account_connections
+                    WHERE account_id = %s
+                    """,
+                    (account_id,),
+                )
+                row = cur.fetchone()
+                return None if row is None else self._from_row(row)
+
     def list_for_project(self, project_id: str) -> tuple[AccountConnection, ...]:
         with self._connect() as conn:
             with conn.cursor() as cur:
