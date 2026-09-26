@@ -99,3 +99,59 @@ def test_oauth_callback_never_accepts_wrong_platform():
         assert response.status_code == 400
     finally:
         os.environ.pop("YOUTUBE_CLIENT_ID", None)
+
+
+class MultiChannelProvider(FakeProvider):
+    def list_accounts(self, access_token: str):
+        assert access_token == "access-secret"
+        return (
+            ProviderAccount(account_id="yt-1", display_name="Channel One"),
+            ProviderAccount(account_id="yt-2", display_name="Channel Two"),
+        )
+
+
+def test_oauth_callback_requires_channel_selection_for_multiple_channels():
+    import os
+    from app.pending_account_selection import PendingAccountSelectionStore
+
+    projects = ProjectService(InMemoryProjectRepository())
+    projects.create(Project(project_id="p1", owner_id="admin", name="Funny"))
+    states = OAuthStateStore()
+    client = TestClient(create_http_app(
+        session_store=InMemorySessionStore(),
+        admin_password_hash=hash_password(PASSWORD),
+        project_service=projects,
+        account_service=AccountLinkingService(),
+        oauth_state_store=states,
+        oauth_exchangers={"youtube": FakeExchanger()},
+        oauth_providers={"youtube": MultiChannelProvider()},
+        credential_vault=InMemoryCredentialVault(),
+        pending_selection_store=PendingAccountSelectionStore(),
+    ))
+    assert client.post("/auth/login", json={"password": PASSWORD}).status_code == 200
+    os.environ["YOUTUBE_CLIENT_ID"] = "public-client-id"
+    try:
+        start = client.post("/api/oauth/youtube/start", params={"project_id": "p1"})
+        state = start.json()["state"]
+        callback = client.get(f"/oauth/callback/youtube?state={state}&code=authorization-code")
+        assert callback.status_code == 200
+        body = callback.json()
+        assert body["status"] == "selection_required"
+        assert [a["account_id"] for a in body["accounts"]] == ["yt-1", "yt-2"]
+
+        selected = client.post("/api/oauth/select-account", json={
+            "selection_token": body["selection_token"],
+            "account_id": "yt-2",
+            "project_id": "p1",
+        })
+        assert selected.status_code == 200
+        assert selected.json()["account_id"] == "yt-2"
+
+        replay = client.post("/api/oauth/select-account", json={
+            "selection_token": body["selection_token"],
+            "account_id": "yt-1",
+            "project_id": "p1",
+        })
+        assert replay.status_code == 400
+    finally:
+        os.environ.pop("YOUTUBE_CLIENT_ID", None)
