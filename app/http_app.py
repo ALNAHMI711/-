@@ -13,6 +13,7 @@ from .auth import AuthenticationError, InMemorySessionStore, verify_password
 from .config import settings
 from .oauth_api import create_oauth_router
 from .oauth_callback import OAuthCallbackStatus, complete_oauth_link, parse_callback_params
+from .oauth_runtime import build_runtime_oauth
 from .oauth_session import OAuthStateStore
 from .redis_oauth_state import RedisOAuthStateStore
 from .postgres_accounts import PostgresAccountRepository
@@ -64,8 +65,12 @@ def create_http_app(
         oauth_states = RedisOAuthStateStore(redis.from_url(settings.redis_url))
     else:
         oauth_states = OAuthStateStore()
-    exchangers = oauth_exchangers or {}
-    providers = oauth_providers or {}
+
+    runtime_oauth = build_runtime_oauth()
+    exchangers = oauth_exchangers if oauth_exchangers is not None else runtime_oauth.exchangers
+    providers = oauth_providers if oauth_providers is not None else runtime_oauth.providers
+    vault = credential_vault if credential_vault is not None else runtime_oauth.credential_vault
+
     configured_password_hash = (
         settings.admin_password_hash if admin_password_hash is None else admin_password_hash
     )
@@ -139,7 +144,7 @@ def create_http_app(
             raise HTTPException(status_code=400, detail="invalid or expired OAuth state")
         exchanger = exchangers.get(expected_state.platform)
         provider = providers.get(expected_state.platform)
-        if exchanger is None or provider is None or credential_vault is None:
+        if exchanger is None or provider is None or vault is None:
             raise HTTPException(status_code=503, detail="OAuth provider is not configured")
         redirect_uri = (
             f"{os.getenv('APP_URL', 'http://localhost:8000').rstrip('/')}"
@@ -154,7 +159,7 @@ def create_http_app(
             state_store=oauth_states,
             exchanger=exchanger,
             provider=provider,
-            vault=credential_vault,
+            vault=vault,
             account_service=accounts,
             required_permissions=get_platform(expected_state.platform).required_scopes,
             error=error,
