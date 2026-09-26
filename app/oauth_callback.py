@@ -130,7 +130,6 @@ def complete_oauth_link(
     vault: CredentialVault,
     account_service: "AccountLinkingService",
     pending_selection_store=None,
-    pending_selection_store=None,
     required_permissions: tuple[str, ...] = (),
     error: str | None = None,
     error_description: str | None = None,
