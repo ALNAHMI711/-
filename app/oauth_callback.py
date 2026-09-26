@@ -151,7 +151,7 @@ def complete_oauth_link(
 
         # A publish permission must have explicit evidence. An empty token scope
         # list is not treated as proof merely because the provider adapter exists.
-        evidence_scopes = set(granted_scopes) or set(verification.permissions)
+        evidence_scopes = set(granted_scopes)
         missing = tuple(sorted(required_set - evidence_scopes))
         if missing:
             return OAuthCompletion(OAuthCallbackResult(
