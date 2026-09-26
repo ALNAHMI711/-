@@ -16,7 +16,6 @@ if TYPE_CHECKING:
 class OAuthCallbackStatus(StrEnum):
     LINKED = "linked"
     SELECTION_REQUIRED = "selection_required"
-    SELECTION_REQUIRED = "selection_required"
     AUTHORIZATION_DENIED = "authorization_denied"
     INVALID_REQUEST = "invalid_request"
     INVALID_STATE = "invalid_state"
@@ -31,8 +30,6 @@ class OAuthCallbackResult:
     error: str | None = None
     account: AccountConnection | None = None
     credential: CredentialRef | None = None
-    selection_token: str | None = None
-    candidate_accounts: tuple[ProviderAccount, ...] = ()
     selection_token: str | None = None
     candidate_accounts: tuple[ProviderAccount, ...] = ()
 
@@ -156,8 +153,6 @@ def complete_oauth_link(
         granted_scopes = tuple(sorted(set(token_set.scope)))
         required_set = {value.strip() for value in required_permissions if value.strip()}
 
-        # A publish permission must have explicit evidence. An empty token scope
-        # list is not treated as proof merely because the provider adapter exists.
         evidence_scopes = set(granted_scopes)
         missing = tuple(sorted(required_set - evidence_scopes))
         if missing:
@@ -176,14 +171,38 @@ def complete_oauth_link(
         list_accounts = getattr(provider, "list_accounts", None)
         if callable(list_accounts):
             accounts = tuple(list_accounts(access_token))
+
         credential = vault.put(
             platform=validation.platform, account_id=provider_account.account_id,
             access_token=access_token, refresh_token=token_set.refresh_token,
             scopes=permissions, expires_at=token_set.expires_at,
         )
+
+        if len(accounts) > 1:
+            if pending_selection_store is None:
+                vault.delete(credential.credential_id)
+                return OAuthCompletion(OAuthCallbackResult(
+                    OAuthCallbackStatus.PROVIDER_ERROR, validation.platform, expected_state,
+                    error="multiple accounts require a selection store",
+                ), provider_account)
+            from .pending_account_selection import PendingAccountSelection
+            selection = pending_selection_store.create(
+                user_id=expected_state.user_id,
+                project_id=expected_state.project_id,
+                platform=validation.platform,
+                credential=credential,
+                accounts=accounts,
+                now=now,
+            )
+            return OAuthCompletion(OAuthCallbackResult(
+                OAuthCallbackStatus.SELECTION_REQUIRED, validation.platform, expected_state,
+                selection_token=selection.token,
+                candidate_accounts=selection.accounts,
+            ), provider_account)
+
         linked = LinkedAccount(
-            account_id=provider_account.account_id, platform=validation.platform,
-            project_id=expected_state.project_id, display_name=provider_account.display_name,
+            account_id=accounts[0].account_id, platform=validation.platform,
+            project_id=expected_state.project_id, display_name=accounts[0].display_name,
             permissions=permissions, connection_state=ConnectionState.CONNECTED,
             verification_state=VerificationState.VERIFIED,
         )
@@ -191,7 +210,7 @@ def complete_oauth_link(
         return OAuthCompletion(OAuthCallbackResult(
             OAuthCallbackStatus.LINKED, validation.platform, expected_state,
             account=account, credential=credential,
-        ), provider_account)
+        ), accounts[0])
     except (ProviderAPIError, AccountLinkingError, ValueError, RuntimeError) as exc:
         return OAuthCompletion(OAuthCallbackResult(
             OAuthCallbackStatus.PROVIDER_ERROR, validation.platform, expected_state,
