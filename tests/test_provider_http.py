@@ -56,3 +56,14 @@ def test_provider_identity_rejects_missing_identity():
         assert "no YouTube channel" in str(exc)
     else:
         raise AssertionError("missing provider identity must fail")
+
+
+
+def test_youtube_provider_lists_all_channels():
+    transport = Transport(Response(200, {"items": [
+        {"id": "UC1", "snippet": {"title": "One"}},
+        {"id": "UC2", "snippet": {"title": "Two"}},
+    ]}))
+    accounts = YouTubeAccountProvider(transport).list_accounts("secret")
+    assert [(a.account_id, a.display_name) for a in accounts] == [("UC1", "One"), ("UC2", "Two")]
+    assert transport.calls[0][2]["maxResults"] == "50"
