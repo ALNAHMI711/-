@@ -55,6 +55,30 @@ class RedisCredentialVault:
         self._client.set(self._prefix + ref.credential_id, json.dumps(payload, separators=(",", ":")))
         return ref
 
+    def find_for_account(self, platform: str, account_id: str) -> CredentialRef | None:
+        wanted_platform = platform.strip().lower()
+        wanted_account = account_id.strip()
+        for key in self._client.scan_iter(match=self._prefix + "*"):
+            raw = self._client.get(key)
+            if raw is None:
+                continue
+            if isinstance(raw, bytes):
+                raw = raw.decode("utf-8")
+            try:
+                data = json.loads(raw)
+                ref = CredentialRef(
+                    credential_id=str(key.decode() if isinstance(key, bytes) else key)[len(self._prefix):],
+                    platform=data["platform"], account_id=data["account_id"],
+                    scopes=tuple(data["scopes"]),
+                    expires_at=datetime.fromisoformat(data["expires_at"]) if data["expires_at"] else None,
+                    refreshable=bool(data["refreshable"]),
+                )
+            except (KeyError, TypeError, ValueError, json.JSONDecodeError):
+                continue
+            if ref.platform == wanted_platform and ref.account_id == wanted_account:
+                return ref
+        return None
+
     def get_secret(self, credential: CredentialRef) -> tuple[str, str | None]:
         raw = self._client.get(self._prefix + credential.credential_id)
         if raw is None:
