@@ -15,6 +15,7 @@ if TYPE_CHECKING:
 
 class OAuthCallbackStatus(StrEnum):
     LINKED = "linked"
+    SELECTION_REQUIRED = "selection_required"
     AUTHORIZATION_DENIED = "authorization_denied"
     INVALID_REQUEST = "invalid_request"
     INVALID_STATE = "invalid_state"
@@ -29,6 +30,8 @@ class OAuthCallbackResult:
     error: str | None = None
     account: AccountConnection | None = None
     credential: CredentialRef | None = None
+    selection_token: str | None = None
+    candidate_accounts: tuple[ProviderAccount, ...] = ()
 
     @property
     def success(self) -> bool:
@@ -123,6 +126,7 @@ def complete_oauth_link(
     provider: AccountProvider,
     vault: CredentialVault,
     account_service: "AccountLinkingService",
+    pending_selection_store=None,
     required_permissions: tuple[str, ...] = (),
     error: str | None = None,
     error_description: str | None = None,
@@ -165,6 +169,10 @@ def complete_oauth_link(
             ), provider_account)
 
         permissions = tuple(sorted(evidence_scopes))
+        accounts = (provider_account,)
+        list_accounts = getattr(provider, "list_accounts", None)
+        if callable(list_accounts):
+            accounts = tuple(list_accounts(access_token))
         credential = vault.put(
             platform=validation.platform, account_id=provider_account.account_id,
             access_token=access_token, refresh_token=token_set.refresh_token,
