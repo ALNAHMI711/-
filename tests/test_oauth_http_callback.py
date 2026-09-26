@@ -24,6 +24,7 @@ class FakeExchanger:
             token_type="Bearer",
             refresh_token="refresh-secret",
             expires_at=datetime(2030, 1, 1, tzinfo=timezone.utc),
+            scope=("https://www.googleapis.com/auth/youtube.upload",),
         )
 
 
