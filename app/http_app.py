@@ -41,6 +41,7 @@ def create_http_app(
     oauth_exchangers: dict[str, object] | None = None,
     oauth_providers: dict[str, object] | None = None,
     credential_vault=None,
+    pending_selection_store: PendingAccountSelectionStore | None = None,
 ) -> FastAPI:
     app = FastAPI(title=settings.app_name, docs_url=None, redoc_url=None)
     if session_store is not None:
@@ -73,7 +74,7 @@ def create_http_app(
     exchangers = oauth_exchangers if oauth_exchangers is not None else runtime_oauth.exchangers
     providers = oauth_providers if oauth_providers is not None else runtime_oauth.providers
     vault = credential_vault if credential_vault is not None else runtime_oauth.credential_vault
-    pending_selections = PendingAccountSelectionStore()
+    pending_selections = pending_selection_store or PendingAccountSelectionStore()
 
     configured_password_hash = (
         settings.admin_password_hash if admin_password_hash is None else admin_password_hash
@@ -165,6 +166,7 @@ def create_http_app(
             provider=provider,
             vault=vault,
             account_service=accounts,
+            pending_selection_store=pending_selections,
             required_permissions=get_platform(expected_state.platform).required_scopes,
             error=error,
             error_description=error_description,
@@ -178,6 +180,14 @@ def create_http_app(
                 "project_id": expected_state.project_id,
                 "account_id": account.account_id if account else "",
                 "credential_id": result.credential.credential_id if result.credential else "",
+            }
+        if result.status == OAuthCallbackStatus.SELECTION_REQUIRED:
+            return {
+                "status": result.status.value,
+                "platform": result.platform,
+                "project_id": expected_state.project_id,
+                "selection_token": result.selection_token or "",
+                "accounts": [{"account_id": a.account_id, "display_name": a.display_name} for a in result.candidate_accounts],
             }
         status_code = 400 if result.status != OAuthCallbackStatus.PROVIDER_ERROR else 502
         raise HTTPException(status_code=status_code, detail=result.error or result.status.value)
