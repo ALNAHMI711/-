@@ -15,6 +15,9 @@ from .oauth_api import create_oauth_router
 from .oauth_callback import OAuthCallbackStatus, complete_oauth_link, parse_callback_params
 from .oauth_runtime import build_runtime_oauth
 from .oauth_session import OAuthStateStore
+from .pending_account_selection import PendingAccountSelectionStore
+from .oauth_callback import LinkedAccount
+from .account_connections import ConnectionState, VerificationState
 from .redis_oauth_state import RedisOAuthStateStore
 from .postgres_accounts import PostgresAccountRepository
 from .postgres_projects import PostgresProjectRepository
@@ -70,6 +73,7 @@ def create_http_app(
     exchangers = oauth_exchangers if oauth_exchangers is not None else runtime_oauth.exchangers
     providers = oauth_providers if oauth_providers is not None else runtime_oauth.providers
     vault = credential_vault if credential_vault is not None else runtime_oauth.credential_vault
+    pending_selections = PendingAccountSelectionStore()
 
     configured_password_hash = (
         settings.admin_password_hash if admin_password_hash is None else admin_password_hash
@@ -177,6 +181,49 @@ def create_http_app(
             }
         status_code = 400 if result.status != OAuthCallbackStatus.PROVIDER_ERROR else 502
         raise HTTPException(status_code=status_code, detail=result.error or result.status.value)
+
+    @app.post("/api/oauth/select-account")
+    def select_oauth_account(payload: dict[str, str], request: Request):
+        session = getattr(request.state, "session", None)
+        if session is None:
+            raise HTTPException(status_code=401, detail="authentication required")
+        selection_token = str(payload.get("selection_token", "")).strip()
+        account_id = str(payload.get("account_id", "")).strip()
+        project_id = str(payload.get("project_id", "")).strip()
+        if not selection_token or not account_id or not project_id:
+            raise HTTPException(status_code=400, detail="selection_token, account_id and project_id are required")
+        if projects.get(session.user_id, project_id) is None:
+            raise HTTPException(status_code=404, detail="project not found")
+        try:
+            pending = pending_selections.consume(
+                selection_token, user_id=session.user_id,
+                project_id=project_id, account_id=account_id,
+            )
+            access_token, refresh_token = vault.get_secret(pending.credential)
+            selected = next(a for a in pending.accounts if a.account_id == account_id)
+            credential = vault.put(
+                platform=pending.platform, account_id=selected.account_id,
+                access_token=access_token, refresh_token=refresh_token,
+                scopes=pending.credential.scopes, expires_at=pending.credential.expires_at,
+            )
+            vault.delete(pending.credential)
+            linked = LinkedAccount(
+                account_id=selected.account_id, platform=pending.platform,
+                project_id=project_id, display_name=selected.display_name,
+                permissions=pending.credential.scopes,
+                connection_state=ConnectionState.CONNECTED,
+                verification_state=VerificationState.VERIFIED,
+            )
+            account = accounts.link(__import__("app.account_linking", fromlist=["LinkRequest"]).LinkRequest(
+                project_id=project_id, account=linked
+            ))
+            return {
+                "status": "linked", "platform": pending.platform,
+                "project_id": project_id, "account_id": account.account_id,
+                "credential_id": credential.credential_id,
+            }
+        except (KeyError, PermissionError, ValueError, RuntimeError, StopIteration) as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from None
 
     app.include_router(create_project_router(projects))
     app.include_router(create_account_router(accounts, projects))
