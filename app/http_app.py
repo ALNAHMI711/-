@@ -8,23 +8,23 @@ from fastapi import FastAPI, HTTPException, Request, Response
 from pydantic import BaseModel
 
 from .account_api import create_account_router
-from .account_linking import AccountLinkingService
+from .account_connections import ConnectionState, VerificationState
+from .account_linking import AccountLinkingService, LinkRequest
 from .auth import AuthenticationError, InMemorySessionStore, verify_password
 from .config import settings
 from .oauth_api import create_oauth_router
-from .oauth_callback import OAuthCallbackStatus, complete_oauth_link, parse_callback_params
+from .oauth_callback import LinkedAccount, OAuthCallbackStatus, complete_oauth_link, parse_callback_params
 from .oauth_runtime import build_runtime_oauth
 from .oauth_session import OAuthStateStore
 from .pending_account_selection import PendingAccountSelectionStore
-from .oauth_callback import LinkedAccount
-from .account_connections import ConnectionState, VerificationState
-from .redis_oauth_state import RedisOAuthStateStore
 from .postgres_accounts import PostgresAccountRepository
 from .postgres_projects import PostgresProjectRepository
 from .postgres_sessions import PostgresSessionStore
 from .platforms import get_platform
 from .project_api import create_project_router
 from .projects import ProjectService
+from .redis_oauth_state import RedisOAuthStateStore
+from .redis_pending_account_selection import RedisPendingAccountSelectionStore
 
 
 class LoginRequest(BaseModel):
@@ -41,7 +41,7 @@ def create_http_app(
     oauth_exchangers: dict[str, object] | None = None,
     oauth_providers: dict[str, object] | None = None,
     credential_vault=None,
-    pending_selection_store: PendingAccountSelectionStore | None = None,
+    pending_selection_store=None,
 ) -> FastAPI:
     app = FastAPI(title=settings.app_name, docs_url=None, redoc_url=None)
     if session_store is not None:
@@ -56,7 +56,6 @@ def create_http_app(
         if settings.database_url
         else None
     )
-
     accounts = account_service or AccountLinkingService(
         repository=PostgresAccountRepository(settings.database_url)
         if settings.database_url
@@ -74,7 +73,13 @@ def create_http_app(
     exchangers = oauth_exchangers if oauth_exchangers is not None else runtime_oauth.exchangers
     providers = oauth_providers if oauth_providers is not None else runtime_oauth.providers
     vault = credential_vault if credential_vault is not None else runtime_oauth.credential_vault
-    pending_selections = pending_selection_store or PendingAccountSelectionStore()
+
+    if pending_selection_store is not None:
+        pending_selections = pending_selection_store
+    elif settings.redis_url:
+        pending_selections = RedisPendingAccountSelectionStore(redis.from_url(settings.redis_url))
+    else:
+        pending_selections = PendingAccountSelectionStore()
 
     configured_password_hash = (
         settings.admin_password_hash if admin_password_hash is None else admin_password_hash
@@ -116,13 +121,8 @@ def create_http_app(
             raise HTTPException(status_code=401, detail="invalid credentials")
         _, token = sessions.create_with_token("admin", ttl_seconds)
         response.set_cookie(
-            cookie_name,
-            token,
-            httponly=True,
-            secure=cookie_secure,
-            samesite="strict",
-            max_age=ttl_seconds,
-            path="/",
+            cookie_name, token, httponly=True, secure=cookie_secure,
+            samesite="strict", max_age=ttl_seconds, path="/",
         )
         return {"status": "authenticated"}
 
@@ -156,38 +156,31 @@ def create_http_app(
             f"/oauth/callback/{expected_state.platform}"
         )
         completion = complete_oauth_link(
-            platform=platform,
-            expected_state=expected_state,
-            received_state=state_value,
-            code=code,
-            redirect_uri=redirect_uri,
-            state_store=oauth_states,
-            exchanger=exchanger,
-            provider=provider,
-            vault=vault,
-            account_service=accounts,
-            pending_selection_store=pending_selections,
+            platform=platform, expected_state=expected_state, received_state=state_value,
+            code=code, redirect_uri=redirect_uri, state_store=oauth_states,
+            exchanger=exchanger, provider=provider, vault=vault,
+            account_service=accounts, pending_selection_store=pending_selections,
             required_permissions=get_platform(expected_state.platform).required_scopes,
-            error=error,
-            error_description=error_description,
+            error=error, error_description=error_description,
         )
         result = completion.result
         if result.status == OAuthCallbackStatus.LINKED:
             account = result.account
             return {
-                "status": result.status.value,
-                "platform": result.platform,
+                "status": result.status.value, "platform": result.platform,
                 "project_id": expected_state.project_id,
                 "account_id": account.account_id if account else "",
                 "credential_id": result.credential.credential_id if result.credential else "",
             }
         if result.status == OAuthCallbackStatus.SELECTION_REQUIRED:
             return {
-                "status": result.status.value,
-                "platform": result.platform,
+                "status": result.status.value, "platform": result.platform,
                 "project_id": expected_state.project_id,
                 "selection_token": result.selection_token or "",
-                "accounts": [{"account_id": a.account_id, "display_name": a.display_name} for a in result.candidate_accounts],
+                "accounts": [
+                    {"account_id": a.account_id, "display_name": a.display_name}
+                    for a in result.candidate_accounts
+                ],
             }
         status_code = 400 if result.status != OAuthCallbackStatus.PROVIDER_ERROR else 502
         raise HTTPException(status_code=status_code, detail=result.error or result.status.value)
@@ -224,9 +217,7 @@ def create_http_app(
                 connection_state=ConnectionState.CONNECTED,
                 verification_state=VerificationState.VERIFIED,
             )
-            account = accounts.link(__import__("app.account_linking", fromlist=["LinkRequest"]).LinkRequest(
-                project_id=project_id, account=linked
-            ))
+            account = accounts.link(LinkRequest(project_id=project_id, account=linked))
             return {
                 "status": "linked", "platform": pending.platform,
                 "project_id": project_id, "account_id": account.account_id,
