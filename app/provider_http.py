@@ -70,6 +70,31 @@ class YouTubeAccountProvider:
             raise ProviderAPIError("YouTube channel identity is incomplete")
         return ProviderAccount(account_id=channel_id, display_name=title)
 
+    def list_accounts(self, access_token: str) -> tuple[ProviderAccount, ...]:
+        if not access_token:
+            raise ProviderAPIError("access token is required")
+        response = self.transport.get(
+            self.endpoint,
+            headers={"Authorization": f"Bearer {access_token}"},
+            params={"part": "snippet", "mine": "true", "maxResults": "50"},
+        )
+        payload = _json(response)
+        items = payload.get("items")
+        if not isinstance(items, list):
+            raise ProviderAPIError("invalid YouTube channel list")
+        accounts: list[ProviderAccount] = []
+        for channel in items:
+            if not isinstance(channel, dict):
+                continue
+            snippet = channel.get("snippet") if isinstance(channel.get("snippet"), dict) else {}
+            channel_id = str(channel.get("id", "")).strip()
+            title = str(snippet.get("title", "")).strip()
+            if channel_id and title:
+                accounts.append(ProviderAccount(account_id=channel_id, display_name=title))
+        if not accounts:
+            raise ProviderAPIError("no YouTube channels were returned")
+        return tuple(accounts)
+
     def verify_permissions(self, access_token: str, required_permissions: tuple[str, ...]) -> ProviderVerification:
         if not access_token:
             raise ProviderAPIError("access token is required")
