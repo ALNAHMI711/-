@@ -56,6 +56,14 @@ def _credentials(prefix: str, *, secret_name: str) -> OAuthClientCredentials | N
     return OAuthClientCredentials(client_id=client_id, client_secret=client_secret)
 
 
+def _tiktok_credentials() -> OAuthClientCredentials | None:
+    client_key = os.getenv("TIKTOK_CLIENT_KEY", "").strip()
+    client_secret = os.getenv("TIKTOK_CLIENT_SECRET", "").strip()
+    if not client_key or not client_secret:
+        return None
+    return OAuthClientCredentials(client_id=client_key, client_secret=client_secret)
+
+
 def _vault() -> EncryptedMemoryCredentialVault | None:
     raw = os.getenv("CREDENTIAL_VAULT_MASTER_KEY", "").strip()
     if not raw:
@@ -73,7 +81,7 @@ def build_runtime_oauth() -> RuntimeOAuth:
     """Build configured provider adapters without exposing deployment secrets."""
     credentials = {
         "youtube": _credentials("YOUTUBE", secret_name="YOUTUBE_CLIENT_SECRET"),
-        "tiktok": _credentials("TIKTOK", secret_name="TIKTOK_CLIENT_SECRET"),
+        "tiktok": _tiktok_credentials(),
         "linkedin": _credentials("LINKEDIN", secret_name="LINKEDIN_CLIENT_SECRET"),
     }
 
