@@ -16,6 +16,7 @@ if TYPE_CHECKING:
 class OAuthCallbackStatus(StrEnum):
     LINKED = "linked"
     SELECTION_REQUIRED = "selection_required"
+    SELECTION_REQUIRED = "selection_required"
     AUTHORIZATION_DENIED = "authorization_denied"
     INVALID_REQUEST = "invalid_request"
     INVALID_STATE = "invalid_state"
@@ -30,6 +31,8 @@ class OAuthCallbackResult:
     error: str | None = None
     account: AccountConnection | None = None
     credential: CredentialRef | None = None
+    selection_token: str | None = None
+    candidate_accounts: tuple[ProviderAccount, ...] = ()
     selection_token: str | None = None
     candidate_accounts: tuple[ProviderAccount, ...] = ()
 
@@ -126,6 +129,7 @@ def complete_oauth_link(
     provider: AccountProvider,
     vault: CredentialVault,
     account_service: "AccountLinkingService",
+    pending_selection_store=None,
     pending_selection_store=None,
     required_permissions: tuple[str, ...] = (),
     error: str | None = None,
