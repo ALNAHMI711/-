@@ -196,7 +196,7 @@ def complete_oauth_link(
             )
             return OAuthCompletion(OAuthCallbackResult(
                 OAuthCallbackStatus.SELECTION_REQUIRED, validation.platform, expected_state,
-                selection_token=selection.token,
+                selection_token=selection.selection_token,
                 candidate_accounts=selection.accounts,
             ), provider_account)
 
