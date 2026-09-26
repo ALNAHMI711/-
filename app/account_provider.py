@@ -36,6 +36,8 @@ class AccountProvider(Protocol):
         self, access_token: str, required_permissions: tuple[str, ...]
     ) -> ProviderVerification: ...
 
+    def list_accounts(self, access_token: str) -> tuple[ProviderAccount, ...]: ...
+
 
 def verify_required_permissions(
     granted: tuple[str, ...], required: tuple[str, ...]
