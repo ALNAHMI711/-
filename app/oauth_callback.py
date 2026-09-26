@@ -37,8 +37,6 @@ class OAuthCallbackResult:
 
 @dataclass(frozen=True)
 class LinkedAccount:
-    """Safe result of an OAuth callback; token material is intentionally absent."""
-
     account_id: str
     platform: str
     project_id: str
@@ -69,39 +67,32 @@ def handle_oauth_callback(
     error_description: str | None = None,
     now: float | None = None,
 ) -> OAuthCallbackResult:
-    """Validate a provider callback before any token exchange or account mutation."""
     normalized_platform = platform.strip().lower()
     if not normalized_platform or expected_state.platform != normalized_platform:
         return OAuthCallbackResult(
-            OAuthCallbackStatus.INVALID_REQUEST,
-            normalized_platform,
+            OAuthCallbackStatus.INVALID_REQUEST, normalized_platform,
             error="منصة OAuth غير صالحة أو لا تطابق جلسة الربط.",
         )
     if not received_state.strip():
         return OAuthCallbackResult(
-            OAuthCallbackStatus.INVALID_STATE,
-            normalized_platform,
+            OAuthCallbackStatus.INVALID_STATE, normalized_platform,
             error="حالة OAuth مفقودة؛ تم رفض الطلب.",
         )
     if not session_store.consume(expected_state, received_state, now=now):
         return OAuthCallbackResult(
-            OAuthCallbackStatus.INVALID_STATE,
-            normalized_platform,
+            OAuthCallbackStatus.INVALID_STATE, normalized_platform,
             error="حالة OAuth غير صالحة أو منتهية أو مستخدمة مسبقًا.",
         )
     if error:
         detail = error_description.strip() if error_description else error.strip()
         return OAuthCallbackResult(
-            OAuthCallbackStatus.AUTHORIZATION_DENIED,
-            normalized_platform,
-            expected_state,
-            error=detail or "تم رفض التفويض من المنصة.",
+            OAuthCallbackStatus.AUTHORIZATION_DENIED, normalized_platform,
+            expected_state, error=detail or "تم رفض التفويض من المنصة.",
         )
     return OAuthCallbackResult(OAuthCallbackStatus.LINKED, normalized_platform, expected_state)
 
 
 def parse_callback_params(params: Mapping[str, str]) -> tuple[str, str, str | None, str | None]:
-    """Extract callback fields without retaining arbitrary provider parameters."""
     return (
         str(params.get("state", "")),
         str(params.get("code", "")),
@@ -111,8 +102,6 @@ def parse_callback_params(params: Mapping[str, str]) -> tuple[str, str, str | No
 
 
 class OAuthCodeExchanger(Protocol):
-    """Provider-specific server-side authorization-code exchange."""
-
     def exchange_code(self, code: str, redirect_uri: str): ...
 
 
@@ -139,25 +128,17 @@ def complete_oauth_link(
     error_description: str | None = None,
     now: float | None = None,
 ) -> OAuthCompletion:
-    """Run the complete server-side callback pipeline without exposing tokens."""
     from .account_linking import AccountLinkingError, LinkRequest
 
     validation = handle_oauth_callback(
-        platform=platform,
-        expected_state=expected_state,
-        received_state=received_state,
-        session_store=state_store,
-        error=error,
-        error_description=error_description,
-        now=now,
+        platform=platform, expected_state=expected_state, received_state=received_state,
+        session_store=state_store, error=error, error_description=error_description, now=now,
     )
     if not validation.success:
         return OAuthCompletion(validation)
     if not code.strip() or not redirect_uri.strip():
         return OAuthCompletion(OAuthCallbackResult(
-            OAuthCallbackStatus.INVALID_REQUEST,
-            validation.platform,
-            expected_state,
+            OAuthCallbackStatus.INVALID_REQUEST, validation.platform, expected_state,
             error="authorization code and redirect_uri are required",
         ))
     try:
@@ -166,50 +147,42 @@ def complete_oauth_link(
         provider_account = provider.get_account(access_token)
         verification = provider.verify_permissions(access_token, required_permissions)
         granted_scopes = tuple(sorted(set(token_set.scope)))
-        if granted_scopes and not set(required_permissions).issubset(granted_scopes):
-            missing = tuple(sorted(set(required_permissions) - set(granted_scopes)))
+        required_set = {value.strip() for value in required_permissions if value.strip()}
+
+        # A publish permission must have explicit evidence. An empty token scope
+        # list is not treated as proof merely because the provider adapter exists.
+        evidence_scopes = set(granted_scopes) or set(verification.permissions)
+        missing = tuple(sorted(required_set - evidence_scopes))
+        if missing:
             return OAuthCompletion(OAuthCallbackResult(
-                OAuthCallbackStatus.PROVIDER_ERROR,
-                validation.platform,
-                expected_state,
+                OAuthCallbackStatus.PROVIDER_ERROR, validation.platform, expected_state,
                 error="required permissions are missing: " + ", ".join(missing),
             ), provider_account)
         if not verification.verified:
             return OAuthCompletion(OAuthCallbackResult(
-                OAuthCallbackStatus.PROVIDER_ERROR,
-                validation.platform,
-                expected_state,
+                OAuthCallbackStatus.PROVIDER_ERROR, validation.platform, expected_state,
                 error="required permissions are missing",
             ), provider_account)
+
+        permissions = tuple(sorted(evidence_scopes))
         credential = vault.put(
-            platform=validation.platform,
-            account_id=provider_account.account_id,
-            access_token=access_token,
-            refresh_token=token_set.refresh_token,
-            scopes=granted_scopes or verification.permissions,
-            expires_at=token_set.expires_at,
+            platform=validation.platform, account_id=provider_account.account_id,
+            access_token=access_token, refresh_token=token_set.refresh_token,
+            scopes=permissions, expires_at=token_set.expires_at,
         )
         linked = LinkedAccount(
-            account_id=provider_account.account_id,
-            platform=validation.platform,
-            project_id=expected_state.project_id,
-            display_name=provider_account.display_name,
-            permissions=granted_scopes or verification.permissions,
-            connection_state=ConnectionState.CONNECTED,
+            account_id=provider_account.account_id, platform=validation.platform,
+            project_id=expected_state.project_id, display_name=provider_account.display_name,
+            permissions=permissions, connection_state=ConnectionState.CONNECTED,
             verification_state=VerificationState.VERIFIED,
         )
         account = account_service.link(LinkRequest(project_id=expected_state.project_id, account=linked))
         return OAuthCompletion(OAuthCallbackResult(
-            OAuthCallbackStatus.LINKED,
-            validation.platform,
-            expected_state,
-            account=account,
-            credential=credential,
+            OAuthCallbackStatus.LINKED, validation.platform, expected_state,
+            account=account, credential=credential,
         ), provider_account)
     except (ProviderAPIError, AccountLinkingError, ValueError, RuntimeError) as exc:
         return OAuthCompletion(OAuthCallbackResult(
-            OAuthCallbackStatus.PROVIDER_ERROR,
-            validation.platform,
-            expected_state,
+            OAuthCallbackStatus.PROVIDER_ERROR, validation.platform, expected_state,
             error=str(exc) or "provider integration failed",
         ))
