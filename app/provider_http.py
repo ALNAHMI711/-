@@ -63,16 +63,18 @@ class HttpxTransport:
                     while len(buffer) >= chunk_size:
                         chunk = bytes(buffer[:chunk_size])
                         del buffer[:chunk_size]
-                        offset = self._put_upload_chunk(
+                        offset, final_response = self._put_upload_chunk(
                             client, upload_url, chunk, offset, total_size,
                             content_type, headers, max_retries,
                         )
                 if buffer or offset == 0:
-                    offset = self._put_upload_chunk(
+                    offset, final_response = self._put_upload_chunk(
                         client, upload_url, bytes(buffer), offset, total_size,
                         content_type, headers, max_retries,
                     )
-        return None
+        if final_response is None:
+            raise ProviderAPIError("resumable upload produced no final response")
+        return final_response
 
     @staticmethod
     def _put_upload_chunk(client, upload_url, chunk, offset, total_size, content_type, headers, max_retries):
@@ -87,15 +89,15 @@ class HttpxTransport:
         for attempt in range(max_retries):
             response = client.put(upload_url, headers=request_headers, content=chunk)
             if response.status_code in (200, 201):
-                return end + 1
+                return end + 1, response
             if response.status_code == 308:
                 range_header = response.headers.get("Range", "")
                 if range_header.startswith("bytes=0-"):
                     try:
-                        return int(range_header.split("-", 1)[1]) + 1
+                        return int(range_header.split("-", 1)[1]) + 1, None
                     except ValueError:
                         pass
-                return end + 1
+                return end + 1, None
             if response.status_code in (408, 429, 500, 502, 503, 504) and attempt + 1 < max_retries:
                 continue
             raise ProviderAPIError(f"resumable upload failed with HTTP {response.status_code}")
