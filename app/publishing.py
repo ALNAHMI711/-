@@ -122,3 +122,58 @@ class LinkedInTextPublisher:
             detail="published by official LinkedIn API",
             published_at=datetime.now(timezone.utc),
         )
+
+
+@dataclass(frozen=True)
+class TikTokDirectPublisher:
+    """Official TikTok Content Posting API publisher using PULL_FROM_URL.
+
+    TikTok returns a publish_id after initialization; that is not proof that
+    moderation and publication have completed, so the result remains PUBLISHING.
+    A later status worker must call the official status endpoint and transition
+    the publication to PUBLISHED or FAILED.
+    """
+
+    platform: str = "tiktok"
+    endpoint: str = "https://open.tiktokapis.com/v2/post/publish/video/init/"
+
+    def __init__(self, transport) -> None:
+        object.__setattr__(self, "transport", transport)
+
+    def publish(self, request: PublishRequest, access_token: str) -> PublishResult:
+        if not request.media_url:
+            raise UnsupportedPublishing("TikTok Direct Post requires a video media_url")
+        if not request.text.strip():
+            raise ValueError("TikTok caption is required")
+        payload = {
+            "post_info": {
+                "title": request.text,
+                "privacy_level": "SELF_ONLY",
+            },
+            "source_info": {
+                "source": "PULL_FROM_URL",
+                "video_url": request.media_url,
+            },
+        }
+        response = self.transport.post(
+            self.endpoint,
+            headers={
+                "Authorization": f"Bearer {access_token}",
+                "Content-Type": "application/json; charset=UTF-8",
+            },
+            json=payload,
+        )
+        if response.status_code >= 400:
+            raise PublishingError(f"TikTok publish initialization failed with HTTP {response.status_code}")
+        body = response.json()
+        data = body.get("data") if isinstance(body, dict) else None
+        publish_id = str(data.get("publish_id", "")).strip() if isinstance(data, dict) else ""
+        if not publish_id:
+            error = body.get("error") if isinstance(body, dict) else None
+            detail = error.get("message", "TikTok returned no publish_id") if isinstance(error, dict) else "TikTok returned no publish_id"
+            raise PublishingError(detail)
+        return PublishResult(
+            state=PublicationState.PUBLISHING,
+            provider_post_id=publish_id,
+            detail="accepted by official TikTok Content Posting API; awaiting status confirmation",
+        )
