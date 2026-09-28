@@ -7,6 +7,7 @@ from app.audit_log import AuditEvent, InMemoryAuditLog
 from app.publishing import (
     LinkedInTextPublisher, PublishRequest, PublicationState,
     PublishingError, PublishingService, TikTokDirectPublisher, UnsupportedPublishing,
+    YouTubeVideoPublisher,
 )
 
 
@@ -173,3 +174,46 @@ def test_audit_log_contains_no_credentials():
     log = InMemoryAuditLog()
     log.append(AuditEvent("evt-1", "admin", "publish", "project-1", "member-1", "published", datetime.now(timezone.utc)))
     assert "access-token" not in str(log.list_for_project("project-1"))
+
+
+class FakeYouTubeTransport:
+    def __init__(self):
+        self.calls = []
+        self.init_response = FakeResponse({}, 200, {"location": "https://upload.example/session"})
+        self.upload_response = FakeResponse({"id": "yt-video-123"}, 200, {})
+
+    def post(self, url, *, headers, json):
+        self.calls.append(("post", url, headers, json))
+        return self.init_response
+
+    def upload_video_from_url(self, upload_url, media_url, *, headers):
+        self.calls.append(("upload", upload_url, media_url, headers))
+        return self.upload_response
+
+
+def test_youtube_video_publish_uses_resumable_upload_and_official_id():
+    transport = FakeYouTubeTransport()
+    publisher = YouTubeVideoPublisher(transport)
+    result = publisher.publish(
+        PublishRequest(
+            "project-1", "channel-1", "youtube",
+            "My video", media_url="https://cdn.example/video.mp4",
+        ),
+        "access-token",
+    )
+    assert result.state is PublicationState.PUBLISHED
+    assert result.provider_post_id == "yt-video-123"
+    assert result.provider_url.endswith("yt-video-123")
+    assert transport.calls[0][1].startswith("https://www.googleapis.com/upload/youtube/v3/videos")
+    assert transport.calls[1][1] == "https://upload.example/session"
+
+
+def test_youtube_rejects_missing_upload_session():
+    transport = FakeYouTubeTransport()
+    transport.init_response = FakeResponse({}, 200, {})
+    publisher = YouTubeVideoPublisher(transport)
+    with pytest.raises(PublishingError):
+        publisher.publish(
+            PublishRequest("project-1", "channel-1", "youtube", "My video", "https://cdn.example/video.mp4"),
+            "access-token",
+        )
