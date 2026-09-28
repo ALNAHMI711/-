@@ -233,6 +233,15 @@ class TikTokDirectPublisher:
         raise PublishingError(f"TikTok returned unknown publish status: {status or 'empty'}")
 
 
+def build_official_publishers(transport) -> dict[str, Publisher]:
+    """Build the official publisher registry from one HTTP transport."""
+    return {
+        "linkedin": LinkedInTextPublisher(transport),
+        "tiktok": TikTokDirectPublisher(transport),
+        "youtube": YouTubeVideoPublisher(transport),
+    }
+
+
 @dataclass(frozen=True)
 class YouTubeVideoPublisher:
     """Official YouTube Data API resumable video publisher."""
