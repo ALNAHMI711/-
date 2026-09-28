@@ -67,3 +67,27 @@ def test_youtube_provider_lists_all_channels():
     accounts = YouTubeAccountProvider(transport).list_accounts("secret")
     assert [(a.account_id, a.display_name) for a in accounts] == [("UC1", "One"), ("UC2", "Two")]
     assert transport.calls[0][2]["maxResults"] == "50"
+
+
+class UploadClient:
+    def __init__(self):
+        self.calls = []
+        self.responses = [Response(308, {}), Response(201, {"id": "yt-1"})]
+
+    def put(self, url, *, headers, content):
+        self.calls.append((url, headers, content))
+        return self.responses.pop(0)
+
+
+def test_resumable_upload_chunk_handles_308_then_final_response():
+    from app.provider_http import HttpxTransport
+
+    client = UploadClient()
+    offset, response = HttpxTransport._put_upload_chunk(
+        client, "https://upload.example/session", b"abc", 0, 3,
+        "video/mp4", {"Authorization": "Bearer token"}, 3,
+    )
+    assert offset == 3
+    assert response is None
+    assert len(client.calls) == 1
+    assert client.calls[0][1]["Content-Range"] == "bytes 0-2/3"
