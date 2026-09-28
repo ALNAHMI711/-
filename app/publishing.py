@@ -280,7 +280,7 @@ class YouTubeVideoPublisher:
         upload_url = str(response.headers.get("location", "")).strip()
         if not upload_url:
             raise PublishingError("YouTube upload initialization returned no resumable upload URL")
-        uploaded = self.transport.upload_video_from_url(
+        uploaded = self.transport.upload_video_resumable(
             upload_url,
             request.media_url,
             headers={"Authorization": f"Bearer {access_token}"},
