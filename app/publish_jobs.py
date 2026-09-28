@@ -1,15 +1,12 @@
-"""Execution boundary for scheduled publishing jobs.
+"""Execution boundary for scheduled publishing jobs."""
 
-This layer is deliberately provider-agnostic: it enforces project/account
-isolation, idempotency and safe audit events before invoking an official API
-publisher.
-"""
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from uuid import uuid4
 
 from .audit_log import AuditEvent
 from .job_queue import Job, JobQueue, JobState
+from .persistence import StoredJob
 from .publishing import PublishRequest, PublishResult, PublicationState, PublishingService
 
 
@@ -23,10 +20,11 @@ class PublishJobPayload:
 
 
 class PublishJobExecutor:
-    def __init__(self, queue: JobQueue, publishing: PublishingService, audit_log) -> None:
+    def __init__(self, queue: JobQueue, publishing: PublishingService, audit_log, job_repository=None) -> None:
         self._queue = queue
         self._publishing = publishing
         self._audit = audit_log
+        self._job_repository = job_repository
         self._pending: dict[str, tuple[PublishJobPayload, str]] = {}
 
     def enqueue(self, payload: PublishJobPayload, idempotency_key: str) -> Job:
@@ -36,6 +34,20 @@ class PublishJobExecutor:
             raise ValueError("project_id and account_id are required")
         job = Job(job_id=f"pub_{uuid4().hex}", job_type="publish", idempotency_key=idempotency_key.strip())
         self._queue.enqueue(job)
+        if self._job_repository is not None:
+            self._job_repository.create(StoredJob(
+                job_id=job.job_id, job_type=job.job_type,
+                idempotency_key=job.idempotency_key, state=job.state.value,
+                attempts=0, max_attempts=job.max_attempts,
+                metadata={
+                    "publish": {
+                        "project_id": payload.project_id,
+                        "account_id": payload.account_id,
+                        "platform": payload.platform,
+                        "media_url": payload.media_url,
+                    }
+                },
+            ))
         self._audit.append(AuditEvent(
             f"evt_{uuid4().hex}", "system", "publish_queued",
             payload.project_id, payload.account_id, "queued", datetime.now(timezone.utc),
@@ -49,6 +61,7 @@ class PublishJobExecutor:
                 project_id=payload.project_id, account_id=payload.account_id,
                 platform=payload.platform, text=payload.text,
                 media_url=payload.media_url, idempotency_key=job.idempotency_key,
+                job_id=job_id,
             ))
         except Exception as exc:
             self._queue.fail(job_id, str(exc), retry=False)
@@ -95,7 +108,7 @@ class PublishJobExecutor:
             result = self._publishing.check_status(
                 payload.project_id, payload.account_id, payload.platform, provider_post_id,
             )
-        except Exception as exc:
+        except Exception:
             self._audit.append(AuditEvent(
                 f"evt_{uuid4().hex}", "system", "publish_status_check_failed",
                 payload.project_id, payload.account_id, "failed", datetime.now(timezone.utc),
@@ -125,7 +138,6 @@ class PublishJobExecutor:
         return result
 
     def poll_provider_confirmations(self) -> tuple[str, ...]:
-        """Confirm only jobs currently waiting for a provider response."""
         completed: list[str] = []
         for job_id, (payload, provider_post_id) in tuple(self._pending.items()):
             job = self._queue.get(job_id)
