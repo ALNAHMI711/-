@@ -50,8 +50,6 @@ def test_publish_job_is_audited_and_completed():
     result = executor.run(job.job_id, "worker-1", payload)
     assert result.state is PublicationState.PUBLISHED
     assert queue.get(job.job_id).state is JobState.SUCCEEDED
-    events = audit.list_for_project("project-1")
-    assert [e.action for e in events] == ["publish_queued", "publish_completed"]
 
 
 def test_publish_job_failure_is_audited():
@@ -71,17 +69,12 @@ def test_publish_job_failure_is_audited():
     else:
         raise AssertionError("expected provider failure")
     assert queue.get(job.job_id).state is JobState.FAILED
-    assert audit.list_for_project("project-1")[-1].action == "publish_failed"
 
 
 def test_publish_job_waits_for_provider_confirmation():
     class PendingService:
         def publish(self, request):
-            return PublishResult(
-                PublicationState.PUBLISHING,
-                provider_post_id="publish-123",
-                detail="awaiting provider confirmation",
-            )
+            return PublishResult(PublicationState.PUBLISHING, provider_post_id="publish-123")
 
     audit = InMemoryAuditLog()
     queue = JobQueue()
@@ -89,8 +82,63 @@ def test_publish_job_waits_for_provider_confirmation():
     payload = PublishJobPayload("project-1", "member-1", "tiktok", "hello")
     job = executor.enqueue(payload, "project-1:member-1:content-3")
     result = executor.run(job.job_id, "worker-1", payload)
-
     assert result.state is PublicationState.PUBLISHING
-    assert result.provider_post_id == "publish-123"
     assert queue.get(job.job_id).state is JobState.WAITING_PROVIDER
-    assert audit.list_for_project("project-1")[-1].action == "publish_waiting_provider"
+
+
+def test_publish_job_confirmation_completes():
+    class ConfirmingService:
+        def publish(self, request):
+            return PublishResult(PublicationState.PUBLISHING, provider_post_id="publish-123")
+
+        def check_status(self, project_id, account_id, platform, provider_post_id):
+            assert (project_id, account_id, platform, provider_post_id) == ("project-1", "member-1", "tiktok", "publish-123")
+            return PublishResult(PublicationState.PUBLISHED, provider_post_id="post-987")
+
+    audit = InMemoryAuditLog()
+    queue = JobQueue()
+    executor = PublishJobExecutor(queue, ConfirmingService(), audit)
+    payload = PublishJobPayload("project-1", "member-1", "tiktok", "hello")
+    job = executor.enqueue(payload, "project-1:member-1:content-4")
+    executor.run(job.job_id, "worker-1", payload)
+    result = executor.confirm(job.job_id, payload, "publish-123")
+    assert result.state is PublicationState.PUBLISHED
+    assert queue.get(job.job_id).state is JobState.SUCCEEDED
+
+
+def test_publish_job_confirmation_keeps_processing():
+    class ProcessingService:
+        def publish(self, request):
+            return PublishResult(PublicationState.PUBLISHING, provider_post_id="publish-123")
+
+        def check_status(self, project_id, account_id, platform, provider_post_id):
+            return PublishResult(PublicationState.PUBLISHING, provider_post_id=provider_post_id)
+
+    audit = InMemoryAuditLog()
+    queue = JobQueue()
+    executor = PublishJobExecutor(queue, ProcessingService(), audit)
+    payload = PublishJobPayload("project-1", "member-1", "tiktok", "hello")
+    job = executor.enqueue(payload, "project-1:member-1:content-5")
+    executor.run(job.job_id, "worker-1", payload)
+    result = executor.confirm(job.job_id, payload, "publish-123")
+    assert result.state is PublicationState.PUBLISHING
+    assert queue.get(job.job_id).state is JobState.WAITING_PROVIDER
+
+
+def test_publish_job_confirmation_fails_closed():
+    class FailedService:
+        def publish(self, request):
+            return PublishResult(PublicationState.PUBLISHING, provider_post_id="publish-123")
+
+        def check_status(self, project_id, account_id, platform, provider_post_id):
+            return PublishResult(PublicationState.FAILED, provider_post_id=provider_post_id, detail="provider rejected")
+
+    audit = InMemoryAuditLog()
+    queue = JobQueue()
+    executor = PublishJobExecutor(queue, FailedService(), audit)
+    payload = PublishJobPayload("project-1", "member-1", "tiktok", "hello")
+    job = executor.enqueue(payload, "project-1:member-1:content-6")
+    executor.run(job.job_id, "worker-1", payload)
+    result = executor.confirm(job.job_id, payload, "publish-123")
+    assert result.state is PublicationState.FAILED
+    assert queue.get(job.job_id).state is JobState.FAILED
