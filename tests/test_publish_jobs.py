@@ -142,3 +142,31 @@ def test_publish_job_confirmation_fails_closed():
     result = executor.confirm(job.job_id, payload, "publish-123")
     assert result.state is PublicationState.FAILED
     assert queue.get(job.job_id).state is JobState.FAILED
+
+def test_provider_confirmation_poller_checks_only_pending_jobs():
+    class PollingService:
+        def __init__(self):
+            self.calls = 0
+
+        def publish(self, request):
+            return PublishResult(PublicationState.PUBLISHING, provider_post_id="publish-poll")
+
+        def check_status(self, project_id, account_id, platform, provider_post_id):
+            self.calls += 1
+            return PublishResult(PublicationState.PUBLISHED, provider_post_id="post-poll")
+
+    audit = InMemoryAuditLog()
+    queue = JobQueue()
+    service = PollingService()
+    executor = PublishJobExecutor(queue, service, audit)
+    payload = PublishJobPayload("project-1", "member-1", "tiktok", "hello")
+    job = executor.enqueue(payload, "project-1:member-1:content-poll")
+    executor.run(job.job_id, "worker-1", payload)
+
+    completed = executor.poll_provider_confirmations()
+
+    assert completed == (job.job_id,)
+    assert service.calls == 1
+    assert queue.get(job.job_id).state is JobState.SUCCEEDED
+    assert executor.poll_provider_confirmations() == ()
+    assert service.calls == 1
