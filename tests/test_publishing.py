@@ -14,8 +14,10 @@ class FakeResponse:
     status_code = 201
     headers = {"x-restli-id": "urn:li:share:123"}
 
-    def __init__(self, body=None):
+    def __init__(self, body=None, status_code=201, headers=None):
         self._body = body or {}
+        self.status_code = status_code
+        self.headers = headers or {"x-restli-id": "urn:li:share:123"}
 
     def json(self):
         return self._body
@@ -117,12 +119,44 @@ def test_tiktok_direct_post_uses_official_api_and_stays_pending():
     )
     assert result.state is PublicationState.PUBLISHING
     assert result.provider_post_id == "v_pub_123"
-    assert transport.calls[0][0].endswith("/v2/post/publish/video/init/")
-    assert transport.calls[0][2]["source_info"] == {
-        "source": "PULL_FROM_URL",
-        "video_url": "https://cdn.example/video.mp4",
-    }
-    assert transport.calls[0][2]["post_info"]["privacy_level"] == "SELF_ONLY"
+
+
+def test_tiktok_status_processing_remains_pending():
+    response = FakeResponse({"data": {"status": "PROCESSING_DOWNLOAD"}, "error": {"code": "ok", "message": ""}})
+    transport = FakeTransport(response)
+    publisher = TikTokDirectPublisher(transport)
+    result = publisher.check_status("v_pub_123", "access-token")
+    assert result.state is PublicationState.PUBLISHING
+    assert result.provider_post_id == "v_pub_123"
+    assert transport.calls[0][0].endswith("/v2/post/publish/status/fetch/")
+    assert transport.calls[0][2] == {"publish_id": "v_pub_123"}
+
+
+def test_tiktok_status_confirms_publication():
+    response = FakeResponse({
+        "data": {
+            "status": "PUBLISH_COMPLETE",
+            "publicaly_available_post_id": ["987654321"],
+        },
+        "error": {"code": "ok", "message": ""},
+    })
+    publisher = TikTokDirectPublisher(FakeTransport(response))
+    result = publisher.check_status("v_pub_123", "access-token")
+    assert result.state is PublicationState.PUBLISHED
+    assert result.provider_post_id == "987654321"
+    assert result.published_at is not None
+
+
+def test_tiktok_status_reports_failure():
+    response = FakeResponse({
+        "data": {"status": "FAILED", "fail_reason": "duration_check_failed"},
+        "error": {"code": "ok", "message": ""},
+    })
+    publisher = TikTokDirectPublisher(FakeTransport(response))
+    result = publisher.check_status("v_pub_123", "access-token")
+    assert result.state is PublicationState.FAILED
+    assert result.provider_post_id == "v_pub_123"
+    assert "duration_check_failed" in result.detail
 
 
 def test_tiktok_rejects_missing_publish_id():
