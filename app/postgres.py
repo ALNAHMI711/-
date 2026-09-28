@@ -32,7 +32,7 @@ class PostgresJobRepository:
             worker_id=row["worker_id"],
             lease_until=row["lease_until"],
             last_error=row["last_error"],
-            metadata=dict(row["metadata"] or {}),
+            metadata=dict(row.get("metadata") or {}),
         )
 
     def create(self, job: StoredJob) -> StoredJob:
