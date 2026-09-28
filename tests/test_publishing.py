@@ -186,8 +186,8 @@ class FakeYouTubeTransport:
         self.calls.append(("post", url, headers, json))
         return self.init_response
 
-    def upload_video_from_url(self, upload_url, media_url, *, headers):
-        self.calls.append(("upload", upload_url, media_url, headers))
+    def upload_video_resumable(self, upload_url, media_url, *, headers):
+        self.calls.append(("upload_resumable", upload_url, media_url, headers))
         return self.upload_response
 
 
@@ -244,6 +244,7 @@ def test_youtube_video_publish_uses_resumable_upload_and_official_id():
     assert result.provider_post_id == "yt-video-123"
     assert result.provider_url.endswith("yt-video-123")
     assert transport.calls[0][1].startswith("https://www.googleapis.com/upload/youtube/v3/videos")
+    assert transport.calls[1][0] == "upload_resumable"
     assert transport.calls[1][1] == "https://upload.example/session"
 
 
