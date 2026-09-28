@@ -7,6 +7,11 @@ from app.provider_http import LinkedInAccountProvider, TikTokAccountProvider, Yo
 class Response:
     status_code: int
     payload: dict
+    headers: dict | None = None
+
+    def __post_init__(self):
+        if self.headers is None:
+            self.headers = {}
 
     def json(self):
         return self.payload
@@ -72,7 +77,7 @@ def test_youtube_provider_lists_all_channels():
 class UploadClient:
     def __init__(self):
         self.calls = []
-        self.responses = [Response(308, {}), Response(201, {"id": "yt-1"})]
+        self.responses = [Response(308, {}, headers={"Range": "bytes=0-2"}), Response(201, {"id": "yt-1"})]
 
     def put(self, url, *, headers, content):
         self.calls.append((url, headers, content))
