@@ -44,6 +44,19 @@ jobs:
     runs-on: ubuntu-latest
     needs: repository-integrity
     services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_DB: mashahid
+          POSTGRES_USER: mashahid
+          POSTGRES_PASSWORD: test-password
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U mashahid -d mashahid"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 10
       redis:
         image: redis:7-alpine
         ports:
@@ -68,6 +81,7 @@ jobs:
           --health-retries 10
     env:
       REDIS_URL: redis://localhost:6379/0
+      DATABASE_URL: postgresql://mashahid:test-password@localhost:5432/mashahid
       DATABASE_URL: postgresql://mashahid:test-password@localhost:5432/mashahid
     steps:
       - uses: actions/checkout@v4
