@@ -66,22 +66,8 @@ jobs:
           --health-interval 5s
           --health-timeout 3s
           --health-retries 10
-      postgres:
-        image: postgres:16-alpine
-        ports:
-          - 5432:5432
-        env:
-          POSTGRES_DB: mashahid
-          POSTGRES_USER: mashahid
-          POSTGRES_PASSWORD: test-password
-        options: >-
-          --health-cmd "pg_isready -U mashahid -d mashahid"
-          --health-interval 5s
-          --health-timeout 3s
-          --health-retries 10
     env:
       REDIS_URL: redis://localhost:6379/0
-      DATABASE_URL: postgresql://mashahid:test-password@localhost:5432/mashahid
       DATABASE_URL: postgresql://mashahid:test-password@localhost:5432/mashahid
     steps:
       - uses: actions/checkout@v4
@@ -99,6 +85,8 @@ jobs:
           for migration in migrations/*.sql; do
             PGPASSWORD=test-password psql --host=127.0.0.1 --username=mashahid --dbname=mashahid --file="$migration"
           done
+      - name: Verify durable PostgreSQL job metadata
+        run: python tests/postgres_persistence_smoke.py
       - name: Run unit, Redis, and PostgreSQL integration tests
         run: python -m pytest -q
 
