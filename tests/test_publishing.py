@@ -5,8 +5,8 @@ import pytest
 from app.account_connections import AccountConnection, ConnectionState, MonetizationState, VerificationState
 from app.audit_log import AuditEvent, InMemoryAuditLog
 from app.publishing import (
-    LinkedInTextPublisher, PublishRequest, PublishResult, PublicationState,
-    PublishingError, PublishingService, UnsupportedPublishing,
+    LinkedInTextPublisher, PublishRequest, PublicationState,
+    PublishingError, PublishingService, TikTokDirectPublisher, UnsupportedPublishing,
 )
 
 
@@ -14,14 +14,21 @@ class FakeResponse:
     status_code = 201
     headers = {"x-restli-id": "urn:li:share:123"}
 
+    def __init__(self, body=None):
+        self._body = body or {}
+
+    def json(self):
+        return self._body
+
 
 class FakeTransport:
-    def __init__(self):
+    def __init__(self, response=None):
         self.calls = []
+        self.response = response or FakeResponse()
 
     def post(self, url, *, headers, json):
         self.calls.append((url, headers, json))
-        return FakeResponse()
+        return self.response
 
 
 class FakeVault:
@@ -96,6 +103,34 @@ def test_media_is_not_claimed_as_published():
     with pytest.raises(UnsupportedPublishing):
         publisher.publish(
             PublishRequest("project-1", "member-1", "linkedin", "caption", media_url="https://example.com/video.mp4"),
+            "access-token",
+        )
+
+
+def test_tiktok_direct_post_uses_official_api_and_stays_pending():
+    response = FakeResponse({"data": {"publish_id": "v_pub_123"}, "error": {"code": "ok", "message": ""}})
+    transport = FakeTransport(response)
+    publisher = TikTokDirectPublisher(transport)
+    result = publisher.publish(
+        PublishRequest("project-1", "tiktok-user", "tiktok", "caption", media_url="https://cdn.example/video.mp4"),
+        "access-token",
+    )
+    assert result.state is PublicationState.PUBLISHING
+    assert result.provider_post_id == "v_pub_123"
+    assert transport.calls[0][0].endswith("/v2/post/publish/video/init/")
+    assert transport.calls[0][2]["source_info"] == {
+        "source": "PULL_FROM_URL",
+        "video_url": "https://cdn.example/video.mp4",
+    }
+    assert transport.calls[0][2]["post_info"]["privacy_level"] == "SELF_ONLY"
+
+
+def test_tiktok_rejects_missing_publish_id():
+    transport = FakeTransport(FakeResponse({"data": {}, "error": {"code": "ok", "message": ""}}))
+    publisher = TikTokDirectPublisher(transport)
+    with pytest.raises(PublishingError):
+        publisher.publish(
+            PublishRequest("project-1", "tiktok-user", "tiktok", "caption", media_url="https://cdn.example/video.mp4"),
             "access-token",
         )
 
