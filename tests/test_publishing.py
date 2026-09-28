@@ -7,7 +7,7 @@ from app.audit_log import AuditEvent, InMemoryAuditLog
 from app.publishing import (
     LinkedInTextPublisher, PublishRequest, PublicationState,
     PublishingError, PublishingService, TikTokDirectPublisher, UnsupportedPublishing,
-    YouTubeVideoPublisher,
+    YouTubeVideoPublisher, build_official_publishers,
 )
 
 
@@ -189,6 +189,12 @@ class FakeYouTubeTransport:
     def upload_video_from_url(self, upload_url, media_url, *, headers):
         self.calls.append(("upload", upload_url, media_url, headers))
         return self.upload_response
+
+
+def test_official_publisher_registry_includes_youtube():
+    registry = build_official_publishers(FakeYouTubeTransport())
+    assert set(registry) == {"linkedin", "tiktok", "youtube"}
+    assert registry["youtube"].platform == "youtube"
 
 
 def test_youtube_video_publish_uses_resumable_upload_and_official_id():
