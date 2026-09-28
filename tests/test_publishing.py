@@ -197,6 +197,39 @@ def test_official_publisher_registry_includes_youtube():
     assert registry["youtube"].platform == "youtube"
 
 
+
+def youtube_account():
+    return AccountConnection(
+        account_id="channel-1", platform="youtube", display_name="Channel",
+        project_id="project-1", connection_state=ConnectionState.CONNECTED,
+        verification_state=VerificationState.VERIFIED,
+        monetization_state=MonetizationState.UNKNOWN,
+        permissions=("https://www.googleapis.com/auth/youtube.upload",),
+    )
+
+
+def youtube_credential():
+    from app.credential_vault import CredentialRef
+    return CredentialRef(
+        "yt-cred-1", "youtube", "channel-1",
+        ("https://www.googleapis.com/auth/youtube.upload",), None, False,
+    )
+
+
+def test_youtube_publishing_service_uses_registered_official_publisher():
+    transport = FakeYouTubeTransport()
+    service = PublishingService(
+        build_official_publishers(transport),
+        FakeAccounts(youtube_account()), FakeVault(youtube_credential()),
+    )
+    result = service.publish(PublishRequest(
+        "project-1", "channel-1", "youtube", "My video",
+        media_url="https://cdn.example/video.mp4",
+    ))
+    assert result.state is PublicationState.PUBLISHED
+    assert result.provider_post_id == "yt-video-123"
+    assert transport.calls[0][3]["status"]["privacyStatus"] == "private"
+
 def test_youtube_video_publish_uses_resumable_upload_and_official_id():
     transport = FakeYouTubeTransport()
     publisher = YouTubeVideoPublisher(transport)
