@@ -30,28 +30,76 @@ class HttpxTransport:
         with httpx.Client(timeout=self.timeout) as client:
             return client.post(url, headers=dict(headers), json=dict(json))
 
-    def upload_video_from_url(self, upload_url: str, media_url: str, *, headers: Mapping[str, str]):
+    def upload_video_resumable(self, upload_url: str, media_url: str, *, headers: Mapping[str, str]):
+        """Stream an HTTPS media source into a resumable upload session."""
         from urllib.parse import urlparse
         import ipaddress
 
-        parsed = urlparse(media_url)
-        if parsed.scheme != "https" or not parsed.hostname:
-            raise ProviderAPIError("media_url must use HTTPS")
-        try:
-            ip = ipaddress.ip_address(parsed.hostname)
-            if ip.is_private or ip.is_loopback or ip.is_link_local or ip.is_reserved:
-                raise ProviderAPIError("media_url resolves to a restricted address")
-        except ValueError:
-            pass
+        def _validate_public_https(url: str, label: str) -> None:
+            parsed = urlparse(url)
+            if parsed.scheme != "https" or not parsed.hostname:
+                raise ProviderAPIError(f"{label} must use HTTPS")
+            try:
+                ip = ipaddress.ip_address(parsed.hostname)
+                if ip.is_private or ip.is_loopback or ip.is_link_local or ip.is_reserved:
+                    raise ProviderAPIError(f"{label} resolves to a restricted address")
+            except ValueError:
+                pass
+
+        _validate_public_https(media_url, "media_url")
+        _validate_public_https(upload_url, "upload_url")
+        chunk_size = 8 * 1024 * 1024
+        max_retries = 3
+        offset = 0
         with httpx.Client(timeout=self.timeout, follow_redirects=False) as client:
-            source = client.get(media_url)
-            source.raise_for_status()
-            content_type = source.headers.get("content-type", "video/mp4").split(";")[0]
-            return client.post(
-                upload_url,
-                headers={"Authorization": headers.get("Authorization", ""), "Content-Type": content_type},
-                content=source.content,
-            )
+            with client.stream("GET", media_url) as source:
+                source.raise_for_status()
+                content_type = source.headers.get("content-type", "video/mp4").split(";")[0]
+                total = source.headers.get("content-length")
+                total_size = int(total) if total and total.isdigit() else None
+                buffer = bytearray()
+                for part in source.iter_bytes(chunk_size=1024 * 1024):
+                    buffer.extend(part)
+                    while len(buffer) >= chunk_size:
+                        chunk = bytes(buffer[:chunk_size])
+                        del buffer[:chunk_size]
+                        offset = self._put_upload_chunk(
+                            client, upload_url, chunk, offset, total_size,
+                            content_type, headers, max_retries,
+                        )
+                if buffer or offset == 0:
+                    offset = self._put_upload_chunk(
+                        client, upload_url, bytes(buffer), offset, total_size,
+                        content_type, headers, max_retries,
+                    )
+        return None
+
+    @staticmethod
+    def _put_upload_chunk(client, upload_url, chunk, offset, total_size, content_type, headers, max_retries):
+        end = offset + len(chunk) - 1
+        total_value = str(total_size) if total_size is not None else "*"
+        request_headers = {
+            "Authorization": headers.get("Authorization", ""),
+            "Content-Type": content_type,
+            "Content-Length": str(len(chunk)),
+            "Content-Range": f"bytes {offset}-{end}/{total_value}",
+        }
+        for attempt in range(max_retries):
+            response = client.put(upload_url, headers=request_headers, content=chunk)
+            if response.status_code in (200, 201):
+                return end + 1
+            if response.status_code == 308:
+                range_header = response.headers.get("Range", "")
+                if range_header.startswith("bytes=0-"):
+                    try:
+                        return int(range_header.split("-", 1)[1]) + 1
+                    except ValueError:
+                        pass
+                return end + 1
+            if response.status_code in (408, 429, 500, 502, 503, 504) and attempt + 1 < max_retries:
+                continue
+            raise ProviderAPIError(f"resumable upload failed with HTTP {response.status_code}")
+        raise ProviderAPIError("resumable upload retry limit exceeded")
 
 
 def _json(response):
