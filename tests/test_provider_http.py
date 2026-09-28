@@ -91,3 +91,25 @@ def test_resumable_upload_chunk_handles_308_then_final_response():
     assert response is None
     assert len(client.calls) == 1
     assert client.calls[0][1]["Content-Range"] == "bytes 0-2/3"
+
+
+def test_resumable_upload_chunk_retries_transient_failure():
+    from app.provider_http import HttpxTransport
+
+    class RetryClient:
+        def __init__(self):
+            self.calls = 0
+        def put(self, url, *, headers, content):
+            self.calls += 1
+            if self.calls == 1:
+                return Response(503, {})
+            return Response(201, {"id": "yt-2"})
+
+    client = RetryClient()
+    offset, response = HttpxTransport._put_upload_chunk(
+        client, "https://upload.example/session", b"abc", 0, 3,
+        "video/mp4", {"Authorization": "Bearer token"}, 3,
+    )
+    assert client.calls == 2
+    assert offset == 3
+    assert response.status_code == 201
