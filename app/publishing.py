@@ -42,6 +42,10 @@ class Publisher(Protocol):
     def publish(self, request: PublishRequest, access_token: str) -> PublishResult: ...
 
 
+class StatusPublisher(Publisher, Protocol):
+    def check_status(self, provider_post_id: str, access_token: str) -> PublishResult: ...
+
+
 class PublishingError(RuntimeError):
     pass
 
@@ -56,26 +60,41 @@ class PublishingService:
         self._accounts = account_repository
         self._vault = credential_vault
 
-    def publish(self, request: PublishRequest) -> PublishResult:
-        if not request.project_id.strip() or not request.account_id.strip():
-            raise ValueError("project_id and account_id are required")
-        if not request.text.strip() and not request.media_url:
-            raise ValueError("text or media_url is required")
-        account = self._accounts.get(request.project_id, request.account_id)
+    def _authorized_publisher(self, project_id: str, account_id: str, platform: str):
+        if not project_id.strip() or not account_id.strip() or not platform.strip():
+            raise ValueError("project_id, account_id and platform are required")
+        account = self._accounts.get(project_id, account_id)
         if account is None:
             raise PublishingError("account is not linked to this project")
         if not account.ready_to_publish:
             raise PublishingError("account is not verified and ready to publish")
-        publisher = self._publishers.get(request.platform)
+        publisher = self._publishers.get(platform)
         if publisher is None:
-            raise UnsupportedPublishing(f"official publisher is not configured: {request.platform}")
-        if publisher.platform != request.platform:
+            raise UnsupportedPublishing(f"official publisher is not configured: {platform}")
+        if publisher.platform != platform:
             raise PublishingError("publisher/platform mismatch")
-        credential = self._vault.find_for_account(request.platform, request.account_id)
+        credential = self._vault.find_for_account(platform, account_id)
         if credential is None:
             raise PublishingError("credential is not available")
         access_token, _ = self._vault.get_secret(credential)
+        return publisher, access_token
+
+    def publish(self, request: PublishRequest) -> PublishResult:
+        if not request.text.strip() and not request.media_url:
+            raise ValueError("text or media_url is required")
+        publisher, access_token = self._authorized_publisher(
+            request.project_id, request.account_id, request.platform
+        )
         return publisher.publish(request, access_token)
+
+    def check_status(self, project_id: str, account_id: str, platform: str, provider_post_id: str) -> PublishResult:
+        if not provider_post_id.strip():
+            raise ValueError("provider_post_id is required")
+        publisher, access_token = self._authorized_publisher(project_id, account_id, platform)
+        checker = getattr(publisher, "check_status", None)
+        if not callable(checker):
+            raise UnsupportedPublishing(f"official status checker is not configured: {platform}")
+        return checker(provider_post_id, access_token)
 
 
 @dataclass(frozen=True)
