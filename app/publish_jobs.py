@@ -9,7 +9,7 @@ from datetime import datetime, timezone
 from uuid import uuid4
 
 from .audit_log import AuditEvent
-from .job_queue import Job, JobQueue
+from .job_queue import Job, JobQueue, JobState
 from .publishing import PublishRequest, PublishResult, PublicationState, PublishingService
 
 
@@ -33,16 +33,11 @@ class PublishJobExecutor:
             raise ValueError("idempotency_key is required")
         if not payload.project_id.strip() or not payload.account_id.strip():
             raise ValueError("project_id and account_id are required")
-        job = Job(
-            job_id=f"pub_{uuid4().hex}",
-            job_type="publish",
-            idempotency_key=idempotency_key.strip(),
-        )
+        job = Job(job_id=f"pub_{uuid4().hex}", job_type="publish", idempotency_key=idempotency_key.strip())
         self._queue.enqueue(job)
         self._audit.append(AuditEvent(
             f"evt_{uuid4().hex}", "system", "publish_queued",
-            payload.project_id, payload.account_id, "queued",
-            datetime.now(timezone.utc),
+            payload.project_id, payload.account_id, "queued", datetime.now(timezone.utc),
         ))
         return job
 
@@ -50,19 +45,15 @@ class PublishJobExecutor:
         job = self._queue.claim(job_id, worker_id)
         try:
             result = self._publishing.publish(PublishRequest(
-                project_id=payload.project_id,
-                account_id=payload.account_id,
-                platform=payload.platform,
-                text=payload.text,
-                media_url=payload.media_url,
-                idempotency_key=job.idempotency_key,
+                project_id=payload.project_id, account_id=payload.account_id,
+                platform=payload.platform, text=payload.text,
+                media_url=payload.media_url, idempotency_key=job.idempotency_key,
             ))
         except Exception as exc:
             self._queue.fail(job_id, str(exc), retry=False)
             self._audit.append(AuditEvent(
                 f"evt_{uuid4().hex}", "system", "publish_failed",
-                payload.project_id, payload.account_id, "failed",
-                datetime.now(timezone.utc),
+                payload.project_id, payload.account_id, "failed", datetime.now(timezone.utc),
             ))
             raise
 
@@ -70,8 +61,7 @@ class PublishJobExecutor:
             self._queue.wait_for_provider(job_id)
             self._audit.append(AuditEvent(
                 f"evt_{uuid4().hex}", "system", "publish_waiting_provider",
-                payload.project_id, payload.account_id, result.state.value,
-                datetime.now(timezone.utc),
+                payload.project_id, payload.account_id, result.state.value, datetime.now(timezone.utc),
             ))
             return result
 
@@ -79,15 +69,50 @@ class PublishJobExecutor:
             self._queue.fail(job_id, result.detail, retry=False)
             self._audit.append(AuditEvent(
                 f"evt_{uuid4().hex}", "system", "publish_failed",
-                payload.project_id, payload.account_id, result.state.value,
-                datetime.now(timezone.utc),
+                payload.project_id, payload.account_id, result.state.value, datetime.now(timezone.utc),
             ))
             return result
 
         self._queue.succeed(job_id)
         self._audit.append(AuditEvent(
             f"evt_{uuid4().hex}", "system", "publish_completed",
-            payload.project_id, payload.account_id, result.state.value,
-            datetime.now(timezone.utc),
+            payload.project_id, payload.account_id, result.state.value, datetime.now(timezone.utc),
+        ))
+        return result
+
+    def confirm(self, job_id: str, payload: PublishJobPayload, provider_post_id: str) -> PublishResult:
+        job = self._queue.get(job_id)
+        if job.state is not JobState.WAITING_PROVIDER:
+            raise ValueError("publish job is not waiting for provider confirmation")
+        try:
+            result = self._publishing.check_status(
+                payload.project_id, payload.account_id, payload.platform, provider_post_id,
+            )
+        except Exception as exc:
+            self._audit.append(AuditEvent(
+                f"evt_{uuid4().hex}", "system", "publish_status_check_failed",
+                payload.project_id, payload.account_id, "failed", datetime.now(timezone.utc),
+            ))
+            raise
+
+        if result.state is PublicationState.PUBLISHING:
+            self._audit.append(AuditEvent(
+                f"evt_{uuid4().hex}", "system", "publish_still_processing",
+                payload.project_id, payload.account_id, result.state.value, datetime.now(timezone.utc),
+            ))
+            return result
+
+        if result.state is PublicationState.FAILED:
+            self._queue.fail(job_id, result.detail, retry=False)
+            self._audit.append(AuditEvent(
+                f"evt_{uuid4().hex}", "system", "publish_failed",
+                payload.project_id, payload.account_id, result.state.value, datetime.now(timezone.utc),
+            ))
+            return result
+
+        self._queue.succeed(job_id)
+        self._audit.append(AuditEvent(
+            f"evt_{uuid4().hex}", "system", "publish_completed",
+            payload.project_id, payload.account_id, result.state.value, datetime.now(timezone.utc),
         ))
         return result
