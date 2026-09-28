@@ -13,6 +13,7 @@ from enum import Enum
 class JobState(str, Enum):
     QUEUED = "queued"
     RUNNING = "running"
+    WAITING_PROVIDER = "waiting_provider"
     SUCCEEDED = "succeeded"
     FAILED = "failed"
     CANCELLED = "cancelled"
@@ -100,18 +101,28 @@ class JobQueue:
         job.lease_until = current + timedelta(seconds=lease_seconds)
         return job
 
-    def succeed(self, job_id: str) -> Job:
+    def wait_for_provider(self, job_id: str) -> Job:
         job = self.get(job_id)
         if job.state is not JobState.RUNNING:
-            raise InvalidJobTransition("only running jobs can succeed")
+            raise InvalidJobTransition("only running jobs can wait for provider")
+        job.state = JobState.WAITING_PROVIDER
+        job.worker_id = None
+        job.lease_until = None
+        return job
+
+    def succeed(self, job_id: str) -> Job:
+        job = self.get(job_id)
+        if job.state not in {JobState.RUNNING, JobState.WAITING_PROVIDER}:
+            raise InvalidJobTransition("only running or provider-waiting jobs can succeed")
         job.state = JobState.SUCCEEDED
         job.lease_until = None
+        job.worker_id = None
         return job
 
     def fail(self, job_id: str, error: str, retry: bool = True) -> Job:
         job = self.get(job_id)
-        if job.state is not JobState.RUNNING:
-            raise InvalidJobTransition("only running jobs can fail")
+        if job.state not in {JobState.RUNNING, JobState.WAITING_PROVIDER}:
+            raise InvalidJobTransition("only running or provider-waiting jobs can fail")
         job.last_error = error.strip()[:500] or "job failed"
         job.lease_until = None
         job.worker_id = None
@@ -123,10 +134,11 @@ class JobQueue:
 
     def cancel(self, job_id: str) -> Job:
         job = self.get(job_id)
-        if job.state not in {JobState.QUEUED, JobState.RUNNING}:
-            raise InvalidJobTransition("only queued or running jobs can be cancelled")
+        if job.state not in {JobState.QUEUED, JobState.RUNNING, JobState.WAITING_PROVIDER}:
+            raise InvalidJobTransition("only queued, running or provider-waiting jobs can be cancelled")
         job.state = JobState.CANCELLED
         job.lease_until = None
+        job.worker_id = None
         return job
 
     def reclaim_expired(self, now: datetime | None = None) -> list[Job]:
