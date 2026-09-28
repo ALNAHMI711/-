@@ -240,8 +240,9 @@ class YouTubeVideoPublisher:
         if not encoded:
             raise PublishingError("YouTube upload session is missing its upload URL")
         try:
+            sealed = base64.b64decode(encoded)
             upload_url = AESGCM(self.session_key).decrypt(
-                base64.b64decode(encoded), b"", request.job_id.encode()
+                sealed[:12], sealed[12:], request.job_id.encode()
             ).decode()
         except Exception as exc:
             raise PublishingError("YouTube upload session could not be authenticated") from exc
