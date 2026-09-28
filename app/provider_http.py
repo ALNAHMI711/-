@@ -15,6 +15,7 @@ from .account_provider import ProviderAPIError, ProviderAccount, ProviderVerific
 class HTTPTransport(Protocol):
     def get(self, url: str, *, headers: Mapping[str, str], params: Mapping[str, str]): ...
     def post(self, url: str, *, headers: Mapping[str, str], json: Mapping[str, object]): ...
+    def upload_video_from_url(self, upload_url: str, media_url: str, *, headers: Mapping[str, str]): ...
 
 
 @dataclass(frozen=True)
@@ -28,6 +29,29 @@ class HttpxTransport:
     def post(self, url: str, *, headers: Mapping[str, str], json: Mapping[str, object]):
         with httpx.Client(timeout=self.timeout) as client:
             return client.post(url, headers=dict(headers), json=dict(json))
+
+    def upload_video_from_url(self, upload_url: str, media_url: str, *, headers: Mapping[str, str]):
+        from urllib.parse import urlparse
+        import ipaddress
+
+        parsed = urlparse(media_url)
+        if parsed.scheme != "https" or not parsed.hostname:
+            raise ProviderAPIError("media_url must use HTTPS")
+        try:
+            ip = ipaddress.ip_address(parsed.hostname)
+            if ip.is_private or ip.is_loopback or ip.is_link_local or ip.is_reserved:
+                raise ProviderAPIError("media_url resolves to a restricted address")
+        except ValueError:
+            pass
+        with httpx.Client(timeout=self.timeout, follow_redirects=False) as client:
+            source = client.get(media_url)
+            source.raise_for_status()
+            content_type = source.headers.get("content-type", "video/mp4").split(";")[0]
+            return client.post(
+                upload_url,
+                headers={"Authorization": headers.get("Authorization", ""), "Content-Type": content_type},
+                content=source.content,
+            )
 
 
 def _json(response):
