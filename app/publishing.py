@@ -231,3 +231,61 @@ class TikTokDirectPublisher:
                 detail=f"TikTok status: {status}",
             )
         raise PublishingError(f"TikTok returned unknown publish status: {status or 'empty'}")
+
+
+@dataclass(frozen=True)
+class YouTubeVideoPublisher:
+    """Official YouTube Data API resumable video publisher."""
+
+    platform: str = "youtube"
+    endpoint: str = "https://www.googleapis.com/upload/youtube/v3/videos?part=snippet,status&uploadType=resumable"
+
+    def __init__(self, transport) -> None:
+        object.__setattr__(self, "transport", transport)
+
+    def publish(self, request: PublishRequest, access_token: str) -> PublishResult:
+        if not request.media_url:
+            raise UnsupportedPublishing("YouTube video publishing requires a media_url")
+        if not request.text.strip():
+            raise ValueError("YouTube title is required")
+        metadata = {
+            "snippet": {
+                "title": request.text[:100],
+                "description": request.text,
+            },
+            "status": {
+                "privacyStatus": "private",
+            },
+        }
+        response = self.transport.post(
+            self.endpoint,
+            headers={
+                "Authorization": f"Bearer {access_token}",
+                "Content-Type": "application/json; charset=UTF-8",
+                "X-Upload-Content-Type": "video/*",
+            },
+            json=metadata,
+        )
+        if response.status_code >= 400:
+            raise PublishingError(f"YouTube upload initialization failed with HTTP {response.status_code}")
+        upload_url = str(response.headers.get("location", "")).strip()
+        if not upload_url:
+            raise PublishingError("YouTube upload initialization returned no resumable upload URL")
+        uploaded = self.transport.upload_video_from_url(
+            upload_url,
+            request.media_url,
+            headers={"Authorization": f"Bearer {access_token}"},
+        )
+        if uploaded.status_code >= 400:
+            raise PublishingError(f"YouTube video upload failed with HTTP {uploaded.status_code}")
+        body = uploaded.json()
+        video_id = str(body.get("id", "")).strip() if isinstance(body, dict) else ""
+        if not video_id:
+            raise PublishingError("YouTube upload returned no video id")
+        return PublishResult(
+            state=PublicationState.PUBLISHED,
+            provider_post_id=video_id,
+            provider_url=f"https://www.youtube.com/watch?v={video_id}",
+            detail="published by official YouTube Data API",
+            published_at=datetime.now(timezone.utc),
+        )
