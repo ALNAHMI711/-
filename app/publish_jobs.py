@@ -9,8 +9,8 @@ from datetime import datetime, timezone
 from uuid import uuid4
 
 from .audit_log import AuditEvent
-from .job_queue import Job, JobQueue, JobState
-from .publishing import PublishRequest, PublishResult, PublishingService
+from .job_queue import Job, JobQueue
+from .publishing import PublishRequest, PublishResult, PublicationState, PublishingService
 
 
 @dataclass(frozen=True)
@@ -65,6 +65,25 @@ class PublishJobExecutor:
                 datetime.now(timezone.utc),
             ))
             raise
+
+        if result.state is PublicationState.PUBLISHING:
+            self._queue.wait_for_provider(job_id)
+            self._audit.append(AuditEvent(
+                f"evt_{uuid4().hex}", "system", "publish_waiting_provider",
+                payload.project_id, payload.account_id, result.state.value,
+                datetime.now(timezone.utc),
+            ))
+            return result
+
+        if result.state is PublicationState.FAILED:
+            self._queue.fail(job_id, result.detail, retry=False)
+            self._audit.append(AuditEvent(
+                f"evt_{uuid4().hex}", "system", "publish_failed",
+                payload.project_id, payload.account_id, result.state.value,
+                datetime.now(timezone.utc),
+            ))
+            return result
+
         self._queue.succeed(job_id)
         self._audit.append(AuditEvent(
             f"evt_{uuid4().hex}", "system", "publish_completed",
