@@ -77,6 +77,8 @@ def test_youtube_upload_session_survives_worker_restart_and_resumes():
     assert session["offset"] == 5
     assert session["state"] == "active"
     assert "https://upload.example/session-1" not in str(session["upload_url"])
+    assert "media_url" not in session
+    assert "https://cdn.example/video.mp4" not in str(session)
 
     second_transport = ResumeTransport()
     second = YouTubeVideoPublisher(second_transport, repo, key)
