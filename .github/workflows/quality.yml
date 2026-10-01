@@ -83,7 +83,9 @@ jobs:
       - name: Apply migrations and verify durable metadata
         run: |
           set -euo pipefail
-          python -c "import os, psycopg; from pathlib import Path; conn=psycopg.connect(os.environ['DATABASE_URL']); [conn.execute(p.read_text()) for p in sorted(Path('migrations').glob('*.sql'))]; conn.commit(); conn.close()"
+          python -m app.migrate
+          # Re-running startup migrations must be safe for existing volumes.
+          python -m app.migrate
           python tests/postgres_persistence_smoke.py
       - name: Run unit, Redis, and PostgreSQL integration tests
         run: python -m pytest -q
