@@ -1,7 +1,10 @@
 """CI smoke test for durable PostgreSQL job metadata."""
 
 import os
-from datetime import datetime, timezone
+import sys
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from app.persistence import StoredJob
 from app.postgres import PostgresJobRepository
@@ -29,10 +32,13 @@ def main() -> None:
     )
     try:
         repo.create(job)
-        restored = repo.get(job.job_id)
+        # A fresh repository instance simulates a worker process restart.
+        restarted_repo = PostgresJobRepository(dsn)
+        restored = restarted_repo.get(job.job_id)
         assert restored.metadata["youtube_upload"]["offset"] == 8388608
         assert restored.metadata["youtube_upload"]["project_id"] == "project-ci"
-        print("PostgreSQL durable job metadata: OK")
+        assert restored.metadata["youtube_upload"]["account_id"] == "channel-ci"
+        print("PostgreSQL durable job metadata survives repository restart: OK")
     finally:
         with repo._connect() as conn:
             with conn.cursor() as cur:
