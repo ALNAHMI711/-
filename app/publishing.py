@@ -1,6 +1,7 @@
 """Official-API publishing domain contracts."""
 
 import base64
+import hashlib
 import secrets
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -234,7 +235,8 @@ class YouTubeVideoPublisher:
             return None
         if raw.get("project_id") != request.project_id or raw.get("account_id") != request.account_id:
             raise PublishingError("YouTube upload session does not belong to this project/account")
-        if raw.get("media_url") != request.media_url:
+        media_digest = hashlib.sha256((request.media_url or "").encode()).hexdigest()
+        if raw.get("media_url_sha256") != media_digest:
             raise PublishingError("YouTube upload session media does not match the publish request")
         encoded = str(raw.get("upload_url", "")).strip()
         if not encoded:
@@ -265,7 +267,7 @@ class YouTubeVideoPublisher:
             "project_id": request.project_id,
             "account_id": request.account_id,
             "platform": "youtube",
-            "media_url": request.media_url,
+            "media_url_sha256": hashlib.sha256((request.media_url or "").encode()).hexdigest(),
             "upload_url": encoded,
             "offset": int(session.get("offset", 0)),
             "state": str(session.get("state", "active")),
