@@ -86,7 +86,7 @@ jobs:
             PGPASSWORD=test-password psql --host=127.0.0.1 --username=mashahid --dbname=mashahid --file="$migration"
           done
       - name: Verify durable PostgreSQL job metadata
-        run: python tests/postgres_persistence_smoke.py
+        run: PYTHONPATH=. python tests/postgres_persistence_smoke.py
       - name: Run unit, Redis, and PostgreSQL integration tests
         run: python -m pytest -q
 
