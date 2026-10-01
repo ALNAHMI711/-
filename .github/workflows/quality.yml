@@ -66,8 +66,22 @@ jobs:
           --health-interval 5s
           --health-timeout 3s
           --health-retries 10
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_DB: mashahid_test
+          POSTGRES_USER: mashahid
+          POSTGRES_PASSWORD: test-password
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U mashahid -d mashahid_test"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 10
     env:
       REDIS_URL: redis://localhost:6379/0
+      DATABASE_URL: postgresql://mashahid:test-password@localhost:5432/mashahid_test
       DATABASE_URL: postgresql://mashahid:test-password@localhost:5432/mashahid
     steps:
       - uses: actions/checkout@v4
