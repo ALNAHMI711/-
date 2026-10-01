@@ -1,14 +1,10 @@
-"""PostgreSQL repository adapter for durable Mashahid job state.
+"""PostgreSQL repository adapter for durable Mashahid job state."""
 
-The adapter uses parameterized SQL and keeps secrets out of job records. It is
-an infrastructure adapter; orchestration code should depend on JobRepository.
-"""
-
-from datetime import datetime
 from typing import Any
 
 import psycopg
 from psycopg.rows import dict_row
+from psycopg.types.json import Jsonb
 
 from .persistence import DuplicateStoredJob, StoredJob
 
@@ -36,6 +32,7 @@ class PostgresJobRepository:
             worker_id=row["worker_id"],
             lease_until=row["lease_until"],
             last_error=row["last_error"],
+            metadata=dict(row.get("metadata") or {}),
         )
 
     def create(self, job: StoredJob) -> StoredJob:
@@ -48,15 +45,15 @@ class PostgresJobRepository:
                         """
                         INSERT INTO jobs
                         (job_id, job_type, idempotency_key, state, attempts,
-                         max_attempts, worker_id, lease_until, last_error)
-                        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
+                         max_attempts, worker_id, lease_until, last_error, metadata)
+                        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                         RETURNING job_id, job_type, idempotency_key, state,
                                   attempts, max_attempts, worker_id, lease_until,
-                                  last_error
+                                  last_error, metadata
                         """,
                         (job.job_id, job.job_type, job.idempotency_key, job.state,
                          job.attempts, job.max_attempts, job.worker_id,
-                         job.lease_until, job.last_error),
+                         job.lease_until, job.last_error, Jsonb(dict(job.metadata))),
                     )
                     return self._to_job(cur.fetchone())
         except psycopg.errors.UniqueViolation as exc:
@@ -67,7 +64,7 @@ class PostgresJobRepository:
             with conn.cursor() as cur:
                 cur.execute(
                     "SELECT job_id, job_type, idempotency_key, state, attempts, "
-                    "max_attempts, worker_id, lease_until, last_error "
+                    "max_attempts, worker_id, lease_until, last_error, metadata "
                     "FROM jobs WHERE job_id = %s",
                     (job_id,),
                 )
@@ -83,15 +80,15 @@ class PostgresJobRepository:
                     """
                     UPDATE jobs SET job_type=%s, idempotency_key=%s, state=%s,
                         attempts=%s, max_attempts=%s, worker_id=%s,
-                        lease_until=%s, last_error=%s
+                        lease_until=%s, last_error=%s, metadata=%s
                     WHERE job_id=%s
                     RETURNING job_id, job_type, idempotency_key, state,
                               attempts, max_attempts, worker_id, lease_until,
-                              last_error
+                              last_error, metadata
                     """,
                     (job.job_type, job.idempotency_key, job.state, job.attempts,
                      job.max_attempts, job.worker_id, job.lease_until,
-                     job.last_error, job.job_id),
+                     job.last_error, Jsonb(dict(job.metadata)), job.job_id),
                 )
                 row = cur.fetchone()
                 if row is None:

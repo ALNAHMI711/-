@@ -1,10 +1,29 @@
 services:
+  db:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: mashahid
+      POSTGRES_USER: mashahid
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set-a-strong-postgres-password}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U mashahid -d mashahid"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
   app:
     build: .
     restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
     environment:
       APP_ENV: production
       APP_NAME: Mashahid
+      DATABASE_URL: postgresql://mashahid:${POSTGRES_PASSWORD}@db:5432/mashahid
     ports:
       - "8000:8000"
     read_only: true
@@ -20,3 +39,6 @@ services:
       timeout: 3s
       retries: 3
       start_period: 10s
+
+volumes:
+  postgres_data:

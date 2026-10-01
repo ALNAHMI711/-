@@ -5,9 +5,9 @@ introduced without coupling orchestration code to a specific ORM. The in-memory
 implementation is deterministic and intended for tests only.
 """
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime
-from typing import Protocol
+from typing import Mapping, Protocol
 
 
 @dataclass(frozen=True)
@@ -21,6 +21,7 @@ class StoredJob:
     worker_id: str | None = None
     lease_until: datetime | None = None
     last_error: str | None = None
+    metadata: Mapping[str, object] = field(default_factory=dict)
 
 
 class JobRepository(Protocol):
