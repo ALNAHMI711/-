@@ -1,22 +1,16 @@
-"""Apply idempotent SQL migrations before the application starts."""
+"""Apply ordered idempotent SQL migrations before application startup."""
 
 from pathlib import Path
 
-import psycopg
-
 from .config import settings
+from .migration_runner import apply_migrations as run_migrations
 
 
 def apply_migrations() -> tuple[str, ...]:
     if not settings.database_url:
         return ()
     directory = Path(__file__).resolve().parents[1] / "migrations"
-    applied: list[str] = []
-    with psycopg.connect(settings.database_url) as connection:
-        for migration in sorted(directory.glob("*.sql")):
-            connection.execute(migration.read_text(encoding="utf-8"))
-            applied.append(migration.name)
-    return tuple(applied)
+    return run_migrations(settings.database_url, str(directory))
 
 
 if __name__ == "__main__":
