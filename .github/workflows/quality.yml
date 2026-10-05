@@ -59,6 +59,19 @@ jobs:
           --health-interval 5s
           --health-timeout 3s
           --health-retries 10
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_DB: mashahid
+          POSTGRES_USER: mashahid
+          POSTGRES_PASSWORD: test-password
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U mashahid -d mashahid"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 10
       redis:
         image: redis:7-alpine
         ports:
@@ -71,6 +84,7 @@ jobs:
     env:
       REDIS_URL: redis://localhost:6379/0
       DATABASE_URL: postgresql://mashahid:test-password@localhost:5432/mashahid
+      DATABASE_URL: postgresql://mashahid:test-password@localhost:5432/mashahid
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -78,6 +92,11 @@ jobs:
           python-version: "3.12"
       - name: Install test dependencies
         run: python -m pip install --disable-pip-version-check -r requirements.txt
+      - name: Apply PostgreSQL migrations
+        run: |
+          for migration in migrations/*.sql; do
+            PGPASSWORD=test-password psql "postgresql://mashahid@localhost:5432/mashahid" -f "$migration"
+          done
       - name: Compile application
         run: python -m compileall -q app tests
       - name: Apply migrations and verify durable metadata
