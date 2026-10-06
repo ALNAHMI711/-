@@ -281,6 +281,34 @@ class YouTubeVideoPublisher:
             metadata=metadata,
         ))
 
+    def check_status(self, provider_post_id: str, access_token: str) -> PublishResult:
+        video_id = provider_post_id.strip()
+        if not video_id:
+            raise ValueError("YouTube video id is required")
+        response = self.transport.get(
+            "https://www.googleapis.com/youtube/v3/videos",
+            headers={"Authorization": f"Bearer {access_token}"},
+            params={"part": "status,processingDetails", "id": video_id},
+        )
+        if response.status_code >= 400:
+            raise PublishingError(f"YouTube status check failed with HTTP {response.status_code}")
+        body = response.json()
+        items = body.get("items") if isinstance(body, dict) else None
+        if not isinstance(items, list) or not items or not isinstance(items[0], dict):
+            raise PublishingError("YouTube video was not found")
+        item = items[0]
+        status = item.get("status") if isinstance(item.get("status"), dict) else {}
+        processing = item.get("processingDetails") if isinstance(item.get("processingDetails"), dict) else {}
+        upload_status = str(status.get("uploadStatus", "")).strip()
+        processing_status = str(processing.get("processingStatus", "")).strip()
+        if upload_status == "failed" or processing_status == "failed":
+            return PublishResult(PublicationState.FAILED, video_id, detail="YouTube reported video processing failure")
+        if processing_status == "processing":
+            return PublishResult(PublicationState.PUBLISHING, video_id, detail="YouTube video is still processing")
+        if upload_status == "uploaded" and processing_status in {"succeeded", ""}:
+            return PublishResult(PublicationState.PUBLISHED, video_id, f"https://www.youtube.com/watch?v={video_id}", detail="confirmed by official YouTube Data API", published_at=datetime.now(timezone.utc))
+        raise PublishingError(f"YouTube returned unknown video status: upload={upload_status or 'empty'}, processing={processing_status or 'empty'}")
+
     def publish(self, request: PublishRequest, access_token: str) -> PublishResult:
         if not request.media_url:
             raise UnsupportedPublishing("YouTube video publishing requires a media_url")
