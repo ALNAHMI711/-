@@ -10,6 +10,7 @@ CREATE TABLE IF NOT EXISTS jobs (
     worker_id TEXT,
     lease_until TIMESTAMPTZ,
     last_error TEXT,
+    metadata JSONB NOT NULL DEFAULT '{}'::jsonb,
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
