@@ -260,3 +260,37 @@ def test_youtube_rejects_missing_upload_session():
             PublishRequest("project-1", "channel-1", "youtube", "My video", "https://cdn.example/video.mp4"),
             "access-token",
         )
+
+class FakeYouTubeStatusTransport(FakeYouTubeTransport):
+    def __init__(self, body):
+        super().__init__()
+        self.status_body = body
+
+    def get(self, url, *, headers, params):
+        self.calls.append(("get", url, params))
+        return FakeResponse(self.status_body, 200, {})
+
+
+def test_youtube_status_processing_remains_pending():
+    publisher = YouTubeVideoPublisher(FakeYouTubeStatusTransport({
+        "items": [{"status": {"uploadStatus": "uploaded"}, "processingDetails": {"processingStatus": "processing"}}]
+    }))
+    result = publisher.check_status("yt-video-123", "access-token")
+    assert result.state is PublicationState.PUBLISHING
+
+
+def test_youtube_status_confirms_processed_video():
+    publisher = YouTubeVideoPublisher(FakeYouTubeStatusTransport({
+        "items": [{"status": {"uploadStatus": "uploaded"}, "processingDetails": {"processingStatus": "succeeded"}}]
+    }))
+    result = publisher.check_status("yt-video-123", "access-token")
+    assert result.state is PublicationState.PUBLISHED
+    assert result.provider_url.endswith("yt-video-123")
+
+
+def test_youtube_status_reports_processing_failure():
+    publisher = YouTubeVideoPublisher(FakeYouTubeStatusTransport({
+        "items": [{"status": {"uploadStatus": "failed"}, "processingDetails": {"processingStatus": "failed"}}]
+    }))
+    result = publisher.check_status("yt-video-123", "access-token")
+    assert result.state is PublicationState.FAILED
