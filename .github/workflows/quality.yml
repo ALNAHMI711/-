@@ -81,7 +81,7 @@ jobs:
       - name: Apply PostgreSQL migrations
         run: |
           for migration in migrations/*.sql; do
-            PGPASSWORD=test-password psql "postgresql://mashahid@localhost:5432/mashahid" -f "$migration"
+            PGPASSWORD=test-password psql "postgresql://mashahid@localhost:5432/mashahid" -v ON_ERROR_STOP=1 -f "$migration"
           done
       - name: Compile application
         run: python -m compileall -q app tests
