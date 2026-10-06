@@ -72,6 +72,7 @@ jobs:
       REDIS_URL: redis://localhost:6379/0
       DATABASE_URL: postgresql://mashahid:test-password@localhost:5432/mashahid
       DATABASE_URL: postgresql://mashahid:test-password@localhost:5432/mashahid
+      DATABASE_URL: postgresql://mashahid:test-password@localhost:5432/mashahid
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
