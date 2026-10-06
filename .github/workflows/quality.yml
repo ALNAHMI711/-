@@ -69,6 +69,7 @@ jobs:
           --health-timeout 3s
           --health-retries 10
     env:
+      DATABASE_URL: postgresql://mashahid:ci-password@localhost:5432/mashahid
       REDIS_URL: redis://localhost:6379/0
       DATABASE_URL: postgresql://mashahid:test-password@localhost:5432/mashahid
       DATABASE_URL: postgresql://mashahid:test-password@localhost:5432/mashahid
