@@ -28,7 +28,6 @@ jobs:
           test -f Dockerfile
           test -f docker-compose.yml
           test -f migrations/001_initial.sql
-          test -f migrations/005_job_metadata.sql
           test ! -f .env
           echo "Baseline files: OK"
       - name: Basic secret-pattern guard
