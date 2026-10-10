@@ -118,3 +118,28 @@ def test_resumable_upload_chunk_retries_transient_failure():
     assert client.calls == 2
     assert offset == 3
     assert response.status_code == 201
+
+
+def test_resumable_upload_retries_only_unacknowledged_suffix():
+    from app.provider_http import HttpxTransport
+
+    class PartialAckClient:
+        def __init__(self):
+            self.calls = []
+            self.responses = [
+                Response(308, {}, headers={"Range": "bytes=0-1"}),
+                Response(201, {"id": "yt-partial"}),
+            ]
+
+        def put(self, url, *, headers, content):
+            self.calls.append((headers["Content-Range"], content))
+            return self.responses.pop(0)
+
+    client = PartialAckClient()
+    offset, response = HttpxTransport._put_upload_chunk(
+        client, "https://upload.example/session", b"abc", 0, 3,
+        "video/mp4", {"Authorization": "Bearer token"}, 3,
+    )
+    assert offset == 3
+    assert response.status_code == 201
+    assert client.calls == [("bytes 0-2/3", b"abc"), ("bytes 2-2/3", b"c")]
