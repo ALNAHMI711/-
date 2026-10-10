@@ -1,21 +1,19 @@
-"""Small HTTP transport primitives for official provider adapters.
-
-This module contains no provider credentials. Adapters receive an access token
-transiently, call an official API endpoint, validate the response shape, and
-return safe account metadata.
-"""
+"""Small HTTP transport primitives for official provider adapters."""
 
 from dataclasses import dataclass
-from typing import Mapping, Protocol
+from typing import Callable, Mapping, Protocol
 import httpx
 
-from .account_provider import ProviderAPIError, ProviderAccount, ProviderVerification, verify_required_permissions
+from .account_provider import ProviderAPIError, ProviderAccount, ProviderVerification
 
 
 class HTTPTransport(Protocol):
     def get(self, url: str, *, headers: Mapping[str, str], params: Mapping[str, str]): ...
     def post(self, url: str, *, headers: Mapping[str, str], json: Mapping[str, object]): ...
-    def upload_video_resumable(self, upload_url: str, media_url: str, *, headers: Mapping[str, str]): ...
+    def upload_video_resumable(
+        self, upload_url: str, media_url: str, *, headers: Mapping[str, str],
+        start_offset: int = 0, on_progress: Callable[[int], None] | None = None,
+    ): ...
 
 
 @dataclass(frozen=True)
@@ -30,10 +28,15 @@ class HttpxTransport:
         with httpx.Client(timeout=self.timeout) as client:
             return client.post(url, headers=dict(headers), json=dict(json))
 
-    def upload_video_resumable(self, upload_url: str, media_url: str, *, headers: Mapping[str, str]):
-        """Stream an HTTPS media source into a resumable upload session."""
+    def upload_video_resumable(
+        self, upload_url: str, media_url: str, *, headers: Mapping[str, str],
+        start_offset: int = 0, on_progress: Callable[[int], None] | None = None,
+    ):
         from urllib.parse import urlparse
         import ipaddress
+
+        if start_offset < 0:
+            raise ValueError("start_offset must be non-negative")
 
         def _validate_public_https(url: str, label: str) -> None:
             parsed = urlparse(url)
@@ -50,13 +53,23 @@ class HttpxTransport:
         _validate_public_https(upload_url, "upload_url")
         chunk_size = 8 * 1024 * 1024
         max_retries = 3
-        offset = 0
+        offset = start_offset
+        final_response = None
+
         with httpx.Client(timeout=self.timeout, follow_redirects=False) as client:
             with client.stream("GET", media_url) as source:
                 source.raise_for_status()
                 content_type = source.headers.get("content-type", "video/mp4").split(";")[0]
                 total = source.headers.get("content-length")
                 total_size = int(total) if total and total.isdigit() else None
+
+                remaining = start_offset
+                while remaining:
+                    part = next(source.iter_bytes(chunk_size=min(1024 * 1024, remaining)), b"")
+                    if not part:
+                        raise ProviderAPIError("media source ended before the saved upload offset")
+                    remaining -= len(part)
+
                 buffer = bytearray()
                 for part in source.iter_bytes(chunk_size=1024 * 1024):
                     buffer.extend(part)
@@ -67,17 +80,25 @@ class HttpxTransport:
                             client, upload_url, chunk, offset, total_size,
                             content_type, headers, max_retries,
                         )
-                if buffer or offset == 0:
+                        if on_progress is not None:
+                            on_progress(offset)
+
+                if buffer or (offset == start_offset and start_offset == 0):
                     offset, final_response = self._put_upload_chunk(
                         client, upload_url, bytes(buffer), offset, total_size,
                         content_type, headers, max_retries,
                     )
+                    if on_progress is not None:
+                        on_progress(offset)
+
         if final_response is None:
             raise ProviderAPIError("resumable upload produced no final response")
         return final_response
 
     @staticmethod
     def _put_upload_chunk(client, upload_url, chunk, offset, total_size, content_type, headers, max_retries):
+        if not chunk:
+            raise ProviderAPIError("resumable upload cannot send an empty chunk")
         end = offset + len(chunk) - 1
         total_value = str(total_size) if total_size is not None else "*"
         request_headers = {
@@ -117,8 +138,6 @@ def _json(response):
 
 
 class YouTubeAccountProvider:
-    """YouTube Data API account identity adapter."""
-
     endpoint = "https://www.googleapis.com/youtube/v3/channels"
 
     def __init__(self, transport: HTTPTransport | None = None) -> None:
@@ -172,15 +191,10 @@ class YouTubeAccountProvider:
     def verify_permissions(self, access_token: str, required_permissions: tuple[str, ...]) -> ProviderVerification:
         if not access_token:
             raise ProviderAPIError("access token is required")
-        # Provider APIs do not expose a universal permission introspection endpoint
-        # for this adapter. The authenticated channel request above is authoritative
-        # for identity; configured scopes remain the source of requested permissions.
         return ProviderVerification(verified=True, permissions=tuple(required_permissions))
 
 
 class TikTokAccountProvider:
-    """TikTok v2 User Info adapter."""
-
     endpoint = "https://open.tiktokapis.com/v2/user/info/"
 
     def __init__(self, transport: HTTPTransport | None = None) -> None:
@@ -212,8 +226,6 @@ class TikTokAccountProvider:
 
 
 class LinkedInAccountProvider:
-    """LinkedIn OpenID Connect user identity adapter."""
-
     endpoint = "https://api.linkedin.com/v2/userinfo"
 
     def __init__(self, transport: HTTPTransport | None = None) -> None:
