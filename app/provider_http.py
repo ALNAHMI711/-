@@ -99,30 +99,53 @@ class HttpxTransport:
     def _put_upload_chunk(client, upload_url, chunk, offset, total_size, content_type, headers, max_retries):
         if not chunk:
             raise ProviderAPIError("resumable upload cannot send an empty chunk")
-        end = offset + len(chunk) - 1
+        original_end = offset + len(chunk) - 1
         total_value = str(total_size) if total_size is not None else "*"
-        request_headers = {
-            "Authorization": headers.get("Authorization", ""),
-            "Content-Type": content_type,
-            "Content-Length": str(len(chunk)),
-            "Content-Range": f"bytes {offset}-{end}/{total_value}",
-        }
-        for attempt in range(max_retries):
-            response = client.put(upload_url, headers=request_headers, content=chunk)
-            if response.status_code in (200, 201):
-                return end + 1, response
-            if response.status_code == 308:
-                range_header = response.headers.get("Range", "")
-                if range_header.startswith("bytes=0-"):
-                    try:
-                        return int(range_header.split("-", 1)[1]) + 1, None
-                    except ValueError:
-                        pass
-                return end + 1, None
-            if response.status_code in (408, 429, 500, 502, 503, 504) and attempt + 1 < max_retries:
+        current_offset = offset
+        pending = chunk
+
+        # A 308 may acknowledge fewer bytes than the client attempted to send.
+        # Only advance to the provider's acknowledged offset; resend the suffix
+        # when necessary instead of skipping bytes.
+        for _ in range(max_retries * 3):
+            end = current_offset + len(pending) - 1
+            request_headers = {
+                "Authorization": headers.get("Authorization", ""),
+                "Content-Type": content_type,
+                "Content-Length": str(len(pending)),
+                "Content-Range": f"bytes {current_offset}-{end}/{total_value}",
+            }
+            response = None
+            for attempt in range(max_retries):
+                response = client.put(upload_url, headers=request_headers, content=pending)
+                if response.status_code in (200, 201):
+                    return end + 1, response
+                if response.status_code == 308:
+                    break
+                if response.status_code not in (408, 429, 500, 502, 503, 504) or attempt + 1 >= max_retries:
+                    raise ProviderAPIError(f"resumable upload failed with HTTP {response.status_code}")
+            if response is None or response.status_code != 308:
+                raise ProviderAPIError("resumable upload retry limit exceeded")
+
+            range_header = response.headers.get("Range", "")
+            if not range_header:
+                # Provider has not acknowledged any bytes from this request.
                 continue
-            raise ProviderAPIError(f"resumable upload failed with HTTP {response.status_code}")
-        raise ProviderAPIError("resumable upload retry limit exceeded")
+            if not range_header.startswith("bytes=0-"):
+                raise ProviderAPIError("provider returned an invalid resumable upload range")
+            try:
+                acknowledged_offset = int(range_header.split("-", 1)[1]) + 1
+            except ValueError as exc:
+                raise ProviderAPIError("provider returned an invalid resumable upload range") from exc
+            if acknowledged_offset < current_offset or acknowledged_offset > end + 1:
+                raise ProviderAPIError("provider returned an inconsistent resumable upload range")
+            if acknowledged_offset == end + 1:
+                return acknowledged_offset, None
+            consumed = acknowledged_offset - current_offset
+            current_offset = acknowledged_offset
+            pending = pending[consumed:]
+
+        raise ProviderAPIError("resumable upload range recovery limit exceeded")
 
 
 def _json(response):
