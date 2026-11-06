@@ -366,6 +366,13 @@ class YouTubeVideoPublisher:
         session["state"] = "completed"
         session["provider_post_id"] = video_id
         self._save_session(request, session)
+        if self.job_repository is not None and request.job_id:
+            return PublishResult(
+                state=PublicationState.PUBLISHING,
+                provider_post_id=video_id,
+                provider_url=f"https://www.youtube.com/watch?v={video_id}",
+                detail="YouTube upload received; awaiting official processing confirmation",
+            )
         return PublishResult(
             state=PublicationState.PUBLISHED,
             provider_post_id=video_id,
