@@ -319,6 +319,8 @@ class YouTubeVideoPublisher:
         if session and session.get("state") == "completed":
             video_id = str(session.get("provider_post_id", "")).strip()
             if video_id:
+                if self.job_repository is not None and request.job_id:
+                    return PublishResult(PublicationState.PUBLISHING, video_id, f"https://www.youtube.com/watch?v={video_id}", detail="upload complete; awaiting official processing confirmation")
                 return PublishResult(PublicationState.PUBLISHED, video_id, f"https://www.youtube.com/watch?v={video_id}", detail="recovered completed YouTube upload", published_at=datetime.now(timezone.utc))
 
         if session:
@@ -366,13 +368,6 @@ class YouTubeVideoPublisher:
         session["state"] = "completed"
         session["provider_post_id"] = video_id
         self._save_session(request, session)
-        if self.job_repository is not None and request.job_id:
-            return PublishResult(
-                state=PublicationState.PUBLISHING,
-                provider_post_id=video_id,
-                provider_url=f"https://www.youtube.com/watch?v={video_id}",
-                detail="YouTube upload received; awaiting official processing confirmation",
-            )
         return PublishResult(
             state=PublicationState.PUBLISHED,
             provider_post_id=video_id,
