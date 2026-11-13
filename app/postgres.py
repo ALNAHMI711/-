@@ -73,6 +73,22 @@ class PostgresJobRepository:
                     raise KeyError(f"job not found: {job_id}")
                 return self._to_job(row)
 
+    def list_by_state(self, state: str, job_type: str | None = None) -> tuple[StoredJob, ...]:
+        query = (
+            "SELECT job_id, job_type, idempotency_key, state, attempts, "
+            "max_attempts, worker_id, lease_until, last_error, metadata "
+            "FROM jobs WHERE state = %s"
+        )
+        params: tuple[object, ...] = (state,)
+        if job_type is not None:
+            query += " AND job_type = %s"
+            params += (job_type,)
+        query += " ORDER BY created_at, job_id"
+        with self._connect() as conn:
+            with conn.cursor() as cur:
+                cur.execute(query, params)
+                return tuple(self._to_job(row) for row in cur.fetchall())
+
     def save(self, job: StoredJob) -> StoredJob:
         with self._connect() as conn:
             with conn.cursor() as cur:
