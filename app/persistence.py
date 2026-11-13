@@ -28,6 +28,7 @@ class JobRepository(Protocol):
     def create(self, job: StoredJob) -> StoredJob: ...
     def get(self, job_id: str) -> StoredJob: ...
     def save(self, job: StoredJob) -> StoredJob: ...
+    def list_by_state(self, state: str, job_type: str | None = None) -> tuple[StoredJob, ...]: ...
 
 
 class DuplicateStoredJob(ValueError):
@@ -55,6 +56,12 @@ class InMemoryJobRepository:
             return self._jobs[job_id]
         except KeyError as exc:
             raise KeyError(f"job not found: {job_id}") from exc
+
+    def list_by_state(self, state: str, job_type: str | None = None) -> tuple[StoredJob, ...]:
+        return tuple(
+            job for job in self._jobs.values()
+            if job.state == state and (job_type is None or job.job_type == job_type)
+        )
 
     def save(self, job: StoredJob) -> StoredJob:
         if job.job_id not in self._jobs:

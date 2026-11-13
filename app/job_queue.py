@@ -66,6 +66,17 @@ class JobQueue:
         self._keys[job.idempotency_key] = job.job_id
         return job
 
+    def restore(self, job: Job) -> Job:
+        """Insert a persisted job into this process without re-enqueueing it."""
+        if job.job_id in self._jobs or job.idempotency_key in self._keys:
+            existing = self._jobs.get(job.job_id)
+            if existing and existing.idempotency_key == job.idempotency_key:
+                return existing
+            raise DuplicateJob(job.job_id)
+        self._jobs[job.job_id] = job
+        self._keys[job.idempotency_key] = job.job_id
+        return job
+
     def get(self, job_id: str) -> Job:
         try:
             return self._jobs[job_id]
